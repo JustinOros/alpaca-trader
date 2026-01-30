@@ -1,0 +1,8 @@
+pandas
+numpy
+pytz
+python-dotenv
+alpaca-trade-api
+backoff
+pydantic
+pydantic-settings
