@@ -41,13 +41,13 @@ APCA_API_BASE_URL="https://paper-api.alpaca.markets"
 ## Usage
 
 ```bash
-python run.py
+python3 run.py
 ```
 
 Or:
 
 ```bash
-python -m alpaca_trader
+python3 -m alpaca_trader
 ```
 
 ## Key Parameters
