@@ -87,6 +87,7 @@ DEFAULT_CONFIG = {
     "ENABLE_SHORT_SELLING": False,
     "RSI_BUY_MAX": 55,
     "RSI_SELL_MIN": 45,
+    "RSI_SELL_MAX": 70,
     "RSI_RANGE_OVERSOLD": 30,
     "RSI_RANGE_OVERBOUGHT": 70,
     "REQUIRE_MA_CROSSOVER": True,
@@ -192,6 +193,7 @@ PULLBACK_PERCENTAGE = float(config["PULLBACK_PERCENTAGE"])
 ENABLE_SHORT_SELLING = bool(config.get("ENABLE_SHORT_SELLING", False))
 RSI_BUY_MAX = float(config.get("RSI_BUY_MAX", 55))
 RSI_SELL_MIN = float(config.get("RSI_SELL_MIN", 45))
+RSI_SELL_MAX = float(config.get("RSI_SELL_MAX", 70))
 RSI_RANGE_OVERSOLD = float(config.get("RSI_RANGE_OVERSOLD", 30))
 RSI_RANGE_OVERBOUGHT = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
 REQUIRE_MA_CROSSOVER = bool(config.get("REQUIRE_MA_CROSSOVER", True))
@@ -424,16 +426,29 @@ def advanced_signal_generator(symbol):
     bearish_crossover = False
     
     if REQUIRE_MA_CROSSOVER and len(bars) >= LONG_WINDOW + CROSSOVER_LOOKBACK:
+        if not hasattr(advanced_signal_generator, 'last_bullish_crossover_bar'):
+            advanced_signal_generator.last_bullish_crossover_bar = -999
+        if not hasattr(advanced_signal_generator, 'last_bearish_crossover_bar'):
+            advanced_signal_generator.last_bearish_crossover_bar = -999
+        
+        current_bar_index = len(bars) - 1
+        
         for i in range(1, CROSSOVER_LOOKBACK + 1):
+            bar_index = current_bar_index - i
             if short_ma_series.iloc[-i-1] <= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] > long_ma_series.iloc[-i]:
-                bullish_crossover = True
-                debug_print(f"Bullish crossover detected {i} bars ago")
+                if bar_index > advanced_signal_generator.last_bullish_crossover_bar:
+                    bullish_crossover = True
+                    advanced_signal_generator.last_bullish_crossover_bar = bar_index
+                    debug_print(f"Bullish crossover detected {i} bars ago")
                 break
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
+            bar_index = current_bar_index - i
             if short_ma_series.iloc[-i-1] >= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] < long_ma_series.iloc[-i]:
-                bearish_crossover = True
-                debug_print(f"Bearish crossover detected {i} bars ago")
+                if bar_index > advanced_signal_generator.last_bearish_crossover_bar:
+                    bearish_crossover = True
+                    advanced_signal_generator.last_bearish_crossover_bar = bar_index
+                    debug_print(f"Bearish crossover detected {i} bars ago")
                 break
     
     rsi_val = rsi(closes, 14).iloc[-1]
@@ -479,7 +494,7 @@ def advanced_signal_generator(symbol):
                 position_type = "long"
                 debug_print(f"BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
         
-        if short_ma < long_ma and rsi_val < 80:
+        if short_ma < long_ma and rsi_val < RSI_SELL_MAX:
             if REQUIRE_MA_CROSSOVER and not bearish_crossover:
                 debug_print("Bearish signal rejected: no recent crossover")
             elif REQUIRE_CANDLE_PATTERN and not bearish_pattern:
@@ -654,6 +669,13 @@ def main():
                         
                         logger.info(f"🔄  Recovered existing {position_type.upper()} position: {abs(qty)} shares @ ${entry_price:.2f}, stop=${stop_loss:.2f}")
                         debug_print(f"Position recovered from previous session")
+                        
+                        entry_time = datetime.now(EASTERN)
+                        
+                        unrealized_plpc = float(existing_position.unrealized_plpc) if hasattr(existing_position, 'unrealized_plpc') else 0
+                        if unrealized_plpc > 0.01:
+                            scale_out_profit_taking.target_1_hit = True
+                            debug_print("Assuming target 1 already hit based on positive P&L")
                         
                         if USE_TRAILING_STOP:
                             atr_based_trailing_stop.trailing_stop = stop_loss
