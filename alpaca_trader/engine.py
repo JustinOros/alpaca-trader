@@ -647,6 +647,11 @@ def main():
                 trades_today = 0
                 total_pnl = 0
                 
+                if hasattr(advanced_signal_generator, 'last_bullish_crossover_bar'):
+                    delattr(advanced_signal_generator, 'last_bullish_crossover_bar')
+                if hasattr(advanced_signal_generator, 'last_bearish_crossover_bar'):
+                    delattr(advanced_signal_generator, 'last_bearish_crossover_bar')
+                
                 try:
                     existing_position = api.get_position(SYMBOL)
                     qty = float(existing_position.qty)
