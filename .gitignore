@@ -1,2 +1,4 @@
 .DS_Store
 alpaca_trader/.env
+alpaca_trader/__pycache__/
+*.pyc
