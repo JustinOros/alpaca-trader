@@ -86,7 +86,11 @@ DEFAULT_CONFIG = {
     "PULLBACK_PERCENTAGE": 0.382,
     "ENABLE_SHORT_SELLING": False,
     "RSI_BUY_MAX": 55,
-    "RSI_SELL_MIN": 45
+    "RSI_SELL_MIN": 45,
+    "RSI_RANGE_OVERSOLD": 30,
+    "RSI_RANGE_OVERBOUGHT": 70,
+    "REQUIRE_MA_CROSSOVER": True,
+    "CROSSOVER_LOOKBACK": 5
 }
 
 if not ENV_PATH.exists():
@@ -188,6 +192,10 @@ PULLBACK_PERCENTAGE = float(config["PULLBACK_PERCENTAGE"])
 ENABLE_SHORT_SELLING = bool(config.get("ENABLE_SHORT_SELLING", False))
 RSI_BUY_MAX = float(config.get("RSI_BUY_MAX", 55))
 RSI_SELL_MIN = float(config.get("RSI_SELL_MIN", 45))
+RSI_RANGE_OVERSOLD = float(config.get("RSI_RANGE_OVERSOLD", 30))
+RSI_RANGE_OVERBOUGHT = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
+REQUIRE_MA_CROSSOVER = bool(config.get("REQUIRE_MA_CROSSOVER", True))
+CROSSOVER_LOOKBACK = int(config.get("CROSSOVER_LOOKBACK", 5))
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -402,11 +410,31 @@ def advanced_signal_generator(symbol):
     
     debug_print("Calculating indicators...")
     if USE_EMA:
-        short_ma = ema(closes, SHORT_WINDOW).iloc[-1]
-        long_ma = ema(closes, LONG_WINDOW).iloc[-1]
+        short_ma_series = ema(closes, SHORT_WINDOW)
+        long_ma_series = ema(closes, LONG_WINDOW)
+        short_ma = short_ma_series.iloc[-1]
+        long_ma = long_ma_series.iloc[-1]
     else:
-        short_ma = sma(closes, SHORT_WINDOW).iloc[-1]
-        long_ma = sma(closes, LONG_WINDOW).iloc[-1]
+        short_ma_series = sma(closes, SHORT_WINDOW)
+        long_ma_series = sma(closes, LONG_WINDOW)
+        short_ma = short_ma_series.iloc[-1]
+        long_ma = long_ma_series.iloc[-1]
+    
+    bullish_crossover = False
+    bearish_crossover = False
+    
+    if REQUIRE_MA_CROSSOVER and len(bars) >= LONG_WINDOW + CROSSOVER_LOOKBACK:
+        for i in range(1, CROSSOVER_LOOKBACK + 1):
+            if short_ma_series.iloc[-i-1] <= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] > long_ma_series.iloc[-i]:
+                bullish_crossover = True
+                debug_print(f"Bullish crossover detected {i} bars ago")
+                break
+        
+        for i in range(1, CROSSOVER_LOOKBACK + 1):
+            if short_ma_series.iloc[-i-1] >= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] < long_ma_series.iloc[-i]:
+                bearish_crossover = True
+                debug_print(f"Bearish crossover detected {i} bars ago")
+                break
     
     rsi_val = rsi(closes, 14).iloc[-1]
     adx_val = adx(highs, lows, closes).iloc[-1]
@@ -438,7 +466,9 @@ def advanced_signal_generator(symbol):
     
     if regime == "trend":
         if short_ma > long_ma and rsi_val < RSI_BUY_MAX:
-            if REQUIRE_CANDLE_PATTERN and not bullish_pattern:
+            if REQUIRE_MA_CROSSOVER and not bullish_crossover:
+                debug_print("Bullish signal rejected: no recent crossover")
+            elif REQUIRE_CANDLE_PATTERN and not bullish_pattern:
                 debug_print("Bullish signal rejected: candle pattern required")
             elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bullish":
                 debug_print("Bullish signal rejected: MACD confirmation required")
@@ -449,8 +479,10 @@ def advanced_signal_generator(symbol):
                 position_type = "long"
                 debug_print(f"BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
         
-        if short_ma < long_ma and rsi_val > RSI_SELL_MIN:
-            if REQUIRE_CANDLE_PATTERN and not bearish_pattern:
+        if short_ma < long_ma and rsi_val < 80:
+            if REQUIRE_MA_CROSSOVER and not bearish_crossover:
+                debug_print("Bearish signal rejected: no recent crossover")
+            elif REQUIRE_CANDLE_PATTERN and not bearish_pattern:
                 debug_print("Bearish signal rejected: candle pattern required")
             elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bearish":
                 debug_print("Bearish signal rejected: MACD confirmation required")
@@ -462,7 +494,7 @@ def advanced_signal_generator(symbol):
                 debug_print(f"SELL signal: strength={strength:.2f}, stop=${stop:.2f}")
     
     elif regime == "range":
-        if current_price <= lower.iloc[-1] and rsi_val < 30:
+        if current_price <= lower.iloc[-1] and rsi_val < RSI_RANGE_OVERSOLD:
             if REQUIRE_CANDLE_PATTERN and not bullish_pattern:
                 debug_print("Range buy rejected: candle pattern required")
             else:
@@ -472,7 +504,7 @@ def advanced_signal_generator(symbol):
                 position_type = "long"
                 debug_print(f"Range BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
         
-        if current_price >= upper.iloc[-1] and rsi_val > 70:
+        if current_price >= upper.iloc[-1] and rsi_val > RSI_RANGE_OVERBOUGHT:
             if REQUIRE_CANDLE_PATTERN and not bearish_pattern:
                 debug_print("Range sell rejected: candle pattern required")
             else:
@@ -599,6 +631,34 @@ def main():
                 trade_count = 0
                 trades_today = 0
                 total_pnl = 0
+                
+                try:
+                    existing_position = api.get_position(SYMBOL)
+                    qty = float(existing_position.qty)
+                    if qty != 0:
+                        position_active = True
+                        entry_price = float(existing_position.avg_entry_price)
+                        position_type = 'long' if qty > 0 else 'short'
+                        bars_for_atr = get_recent_bars(SYMBOL, 50)
+                        if bars_for_atr is not None and len(bars_for_atr) >= 14:
+                            atr_val = atr(bars_for_atr['high'], bars_for_atr['low'], bars_for_atr['close']).iloc[-1]
+                            if position_type == 'long':
+                                stop_loss = entry_price - atr_val * ATR_STOP_MULTIPLIER
+                            else:
+                                stop_loss = entry_price + atr_val * ATR_STOP_MULTIPLIER
+                        else:
+                            if position_type == 'long':
+                                stop_loss = entry_price * 0.98
+                            else:
+                                stop_loss = entry_price * 1.02
+                        
+                        logger.info(f"🔄  Recovered existing {position_type.upper()} position: {abs(qty)} shares @ ${entry_price:.2f}, stop=${stop_loss:.2f}")
+                        debug_print(f"Position recovered from previous session")
+                        
+                        if USE_TRAILING_STOP:
+                            atr_based_trailing_stop.trailing_stop = stop_loss
+                except Exception as e:
+                    debug_print(f"No existing position found or error during recovery: {e}")
                 
                 while clock.is_open:
                     clock = api.get_clock()

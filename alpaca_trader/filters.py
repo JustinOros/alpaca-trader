@@ -83,13 +83,16 @@ def get_vix(client: AlpacaClient, symbol: str, use_vix_filter: bool):
         vix = client.get_bars("VIX", "1Day", limit=5)
         if len(vix) > 0:
             return vix["close"].iloc[-1]
-    except:
-        pass
+    except Exception as e:
+        print(f"Warning: VIX data unavailable: {e}")
     try:
         spy = client.get_bars(symbol, "1Day", limit=20)
         if len(spy) >= 20:
             returns = spy["close"].pct_change()
-            return returns.std() * (252 ** 0.5) * 100
-    except:
-        pass
-    return 15
+            calculated_vix = returns.std() * (252 ** 0.5) * 100
+            print(f"Using calculated volatility as VIX proxy: {calculated_vix:.1f}")
+            return calculated_vix
+    except Exception as e:
+        print(f"Warning: Could not calculate volatility: {e}")
+    print("Warning: VIX data unavailable, skipping VIX filter for this iteration")
+    return 0
