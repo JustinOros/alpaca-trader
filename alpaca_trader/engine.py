@@ -12,7 +12,8 @@ import pytz
 
 from .api import AlpacaClient
 from .indicators import sma, ema, rsi, atr, adx, macd, bollinger
-from .filters import check_volume, check_candle_pattern, check_macd_confirmation, check_200_sma_filter, check_multiframe_confluence as _check_multiframe_confluence, detect_market_regime, get_vix
+from .filters import check_volume, check_candle_pattern, check_macd_confirmation, check_200_sma_filter, detect_market_regime, get_vix
+from .filters import check_multiframe_confluence
 from .utils import EASTERN, seconds_to_human_readable
 
 SCRIPT_DIR = Path(__file__).parent
@@ -421,7 +422,7 @@ def advanced_signal_generator(symbol):
     
     bullish_pattern, bearish_pattern = check_candle_pattern(bars)
     macd_signal = check_macd_confirmation(bars)
-    multiframe_trend = check_multiframe_confluence(SYMBOL, USE_EMA) if MULTIFRAME_FILTER else "neutral"
+    multiframe_trend = check_multiframe_confluence(SYMBOL, USE_EMA, api) if MULTIFRAME_FILTER else "neutral"
     regime = detect_market_regime(bars, ADX_THRESHOLD) if REGIME_DETECTION else "trend"
     
     debug_print(f"Filters: regime={regime}, multiframe={multiframe_trend}, macd={macd_signal}")
@@ -561,12 +562,6 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
             return True
     
     return False
-
-def check_multiframe_confluence(symbol):
-    debug_print(f"Checking multiframe confluence for {symbol}")
-    if not MULTIFRAME_FILTER:
-        return "neutral"
-    return _check_multiframe_confluence(symbol, api, USE_EMA)
 
 def main():
     logger.info("🚀  Trading engine starting...")
@@ -770,7 +765,7 @@ def main():
                     except Exception:
                         current_time = datetime.now(EASTERN).strftime("%I:%M:%S %p ET")
                     
-                    hourly_trend = check_multiframe_confluence(SYMBOL)
+                    hourly_trend = check_multiframe_confluence(SYMBOL, USE_EMA, api)
                     status_msg = f"⏱️  {current_time} | {position_status} | {regime.upper()}"
                     
                     if position_active:
