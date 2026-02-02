@@ -84,7 +84,9 @@ DEFAULT_CONFIG = {
     "REQUIRE_MACD_CONFIRMATION": False,
     "MIN_RISK_REWARD": 1.5,
     "PULLBACK_PERCENTAGE": 0.382,
-    "ENABLE_SHORT_SELLING": False
+    "ENABLE_SHORT_SELLING": False,
+    "RSI_BUY_MAX": 55,
+    "RSI_SELL_MIN": 45
 }
 
 if not ENV_PATH.exists():
@@ -184,6 +186,8 @@ REQUIRE_MACD_CONFIRMATION = bool(config["REQUIRE_MACD_CONFIRMATION"])
 MIN_RISK_REWARD = float(config["MIN_RISK_REWARD"])
 PULLBACK_PERCENTAGE = float(config["PULLBACK_PERCENTAGE"])
 ENABLE_SHORT_SELLING = bool(config.get("ENABLE_SHORT_SELLING", False))
+RSI_BUY_MAX = float(config.get("RSI_BUY_MAX", 55))
+RSI_SELL_MIN = float(config.get("RSI_SELL_MIN", 45))
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -433,7 +437,7 @@ def advanced_signal_generator(symbol):
     position_type = None
     
     if regime == "trend":
-        if short_ma > long_ma and rsi_val < 55:
+        if short_ma > long_ma and rsi_val < RSI_BUY_MAX:
             if REQUIRE_CANDLE_PATTERN and not bullish_pattern:
                 debug_print("Bullish signal rejected: candle pattern required")
             elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bullish":
@@ -445,7 +449,7 @@ def advanced_signal_generator(symbol):
                 position_type = "long"
                 debug_print(f"BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
         
-        if short_ma < long_ma and rsi_val > 45:
+        if short_ma < long_ma and rsi_val > RSI_SELL_MIN:
             if REQUIRE_CANDLE_PATTERN and not bearish_pattern:
                 debug_print("Bearish signal rejected: candle pattern required")
             elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bearish":
