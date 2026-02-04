@@ -608,6 +608,10 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
     
     current_atr = atr(bars['high'], bars['low'], bars['close']).iloc[-1]
     
+    if current_atr <= 0 or pd.isna(current_atr):
+        debug_print(f"Invalid ATR value: {current_atr}, using initial stop")
+        return False
+    
     if position_type == 'long':
         new_stop = current_price - (current_atr * ATR_STOP_MULTIPLIER)
         if new_stop > position_state.trailing_stop:
@@ -874,7 +878,37 @@ def main():
                 logger.info("✅  Day complete. Waiting for next session...")
                 debug_print(f"Day complete. Trades: {trade_count}, PnL: ${session_pnl:+.2f}")
                 
-                time.sleep(3600)
+                next_open = None
+                next_close = None
+                try:
+                    clock = api.get_clock()
+                    if clock.next_open and clock.next_close:
+                        next_open = clock.next_open
+                        next_close = clock.next_close
+                        if next_open.tzinfo is None:
+                            next_open = EASTERN.localize(next_open)
+                        else:
+                            next_open = next_open.astimezone(EASTERN)
+                        if next_close.tzinfo is None:
+                            next_close = EASTERN.localize(next_close)
+                        else:
+                            next_close = next_close.astimezone(EASTERN)
+                except Exception as e:
+                    debug_print(f"Could not fetch next open time: {e}")
+                
+                if next_open:
+                    now = datetime.now(EASTERN)
+                    wait_seconds = (next_open - now).total_seconds()
+                    if wait_seconds > 0:
+                        logger.info(f"⏰  Next session: {next_open.strftime('%Y-%m-%d %I:%M %p ET')}")
+                        logger.info(f"⏳  Sleeping {seconds_to_human_readable(int(wait_seconds))}")
+                        debug_print(f"Sleeping until next market open: {wait_seconds}s")
+                        time.sleep(wait_seconds)
+                    else:
+                        time.sleep(60)
+                else:
+                    logger.info("⏳  Sleeping 1 hour before retry")
+                    time.sleep(3600)
                 
             except Exception as e:
                 logger.error(f"💥  Session error: {e}")
