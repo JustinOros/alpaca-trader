@@ -1006,9 +1006,12 @@ def main():
                                 else:
                                     execution_price = submit_market_buy(SYMBOL, position_size)
                             elif signal == 'sell':
-                                logger.warning("⚠️  Sell signal ignored - short selling not allowed with cash account")
-                                debug_print("Short selling blocked for cash account")
-                                signal = None
+                                if USE_LIMIT_ORDERS:
+                                    bid, ask = get_bid_ask(SYMBOL)
+                                    limit_price = ask
+                                    execution_price = submit_limit_short_sell(SYMBOL, position_size, limit_price)
+                                else:
+                                    execution_price = submit_short_sell(SYMBOL, position_size)
                             
                             if execution_price:
                                 trade_count += 1
