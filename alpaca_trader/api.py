@@ -55,41 +55,45 @@ class AlpacaClient:
         return self.api.get_position(symbol)
     
     def place_order(self, symbol, side, notional, limit_price, limit_order_timeout):
-        quote = self.get_latest_quote(symbol)
-        if quote is None:
-            return None
-        bid_price = getattr(quote, 'bid_price', None)
-        ask_price = getattr(quote, 'ask_price', None)
-        if limit_price:
-            price_source = limit_price
-        else:
-            price_source = bid_price if side == "buy" else ask_price
-        if price_source is None or price_source <= 0:
-            return None
-        shares = int(notional / price_source)
-        if shares == 0:
-            return None
-        if limit_price:
-            order = self.submit_order(symbol=symbol, qty=shares, side=side, type="limit", limit_price=round(limit_price, 2), time_in_force="day")
-            start = time.time()
-            while time.time() - start < limit_order_timeout:
-                status = self.get_order(order.id)
-                if status.status == "filled":
-                    return float(status.filled_avg_price)
-                if status.status in {"cancelled", "expired", "rejected"}:
-                    return None
-                time.sleep(2)
-            self.cancel_order(order.id)
-            return None
-        order = self.submit_order(symbol=symbol, qty=shares, side=side, type="market", time_in_force="day")
-        status = self.get_order(order.id)
-        timeout = 30
-        start_time = time.time()
-        while status.status not in {"filled", "cancelled", "expired", "rejected"}:
-            if time.time() - start_time > timeout:
+        try:
+            quote = self.get_latest_quote(symbol)
+            if quote is None:
                 return None
-            time.sleep(0.5)
+            bid_price = getattr(quote, 'bid_price', None)
+            ask_price = getattr(quote, 'ask_price', None)
+            if limit_price:
+                price_source = limit_price
+            else:
+                price_source = bid_price if side == "buy" else ask_price
+            if price_source is None or price_source <= 0:
+                return None
+            shares = int(notional / price_source)
+            if shares == 0:
+                return None
+            if limit_price:
+                order = self.submit_order(symbol=symbol, qty=shares, side=side, type="limit", limit_price=round(limit_price, 2), time_in_force="day")
+                start = time.time()
+                while time.time() - start < limit_order_timeout:
+                    status = self.get_order(order.id)
+                    if status.status == "filled":
+                        return float(status.filled_avg_price)
+                    if status.status in {"cancelled", "expired", "rejected"}:
+                        return None
+                    time.sleep(2)
+                self.cancel_order(order.id)
+                return None
+            order = self.submit_order(symbol=symbol, qty=shares, side=side, type="market", time_in_force="day")
             status = self.get_order(order.id)
-        if status.status == "filled":
-            return float(status.filled_avg_price)
-        return None
+            timeout = 30
+            start_time = time.time()
+            while status.status not in {"filled", "cancelled", "expired", "rejected"}:
+                if time.time() - start_time > timeout:
+                    return None
+                time.sleep(0.5)
+                status = self.get_order(order.id)
+            if status.status == "filled":
+                return float(status.filled_avg_price)
+            return None
+        except Exception as e:
+            print(f"Order placement error: {e}")
+            return None

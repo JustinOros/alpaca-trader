@@ -763,6 +763,10 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
                 position_state.target_1_hit = True
                 logger.info(f"💰  Partial profit @ {profit_pct:.2f}% ({half_qty} shares)")
                 debug_print(f"Partial profit taken: {half_qty} shares @ {profit_pct:.2f}%")
+            else:
+                position_state.target_1_hit = True
+                logger.info(f"💰  Target 1 reached @ {profit_pct:.2f}% (position too small to scale)")
+                debug_print(f"Position size {qty} too small for partial exit, holding for target 2")
     
     if profit_pct >= target_2_pct:
         qty = current_position_qty(symbol)
