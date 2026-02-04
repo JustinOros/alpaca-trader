@@ -991,6 +991,7 @@ def main():
                     if signal == 'sell' and not ENABLE_SHORT_SELLING:
                         debug_print("Short selling disabled, ignoring sell signal")
                         signal = None
+                        signal_position_type = None
                     
                     bars = get_recent_bars(SYMBOL, 50)
                     if bars is not None:
@@ -1028,7 +1029,7 @@ def main():
                                 entry_time = datetime.now(EASTERN)
                                 stop_loss = signal_stop_loss
                                 position_active = True
-                                position_type = 'long' if signal == 'buy' else 'short'
+                                position_type = signal_position_type
                                 
                                 if T1_SETTLEMENT_ENABLED and signal == 'buy':
                                     trade_amount = position_size
