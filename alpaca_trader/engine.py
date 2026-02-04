@@ -706,6 +706,8 @@ def advanced_signal_generator(symbol):
         if current_price <= lower.iloc[-1] and rsi_val < RSI_RANGE_OVERSOLD:
             if REQUIRE_CANDLE_PATTERN and not bullish_pattern:
                 debug_print("Range buy rejected: candle pattern required")
+            elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bullish":
+                debug_print("Range buy rejected: MACD confirmation required")
             else:
                 signal = "buy"
                 strength = 0.85
@@ -716,6 +718,8 @@ def advanced_signal_generator(symbol):
         elif current_price >= upper.iloc[-1] and rsi_val > RSI_RANGE_OVERBOUGHT:
             if REQUIRE_CANDLE_PATTERN and not bearish_pattern:
                 debug_print("Range sell rejected: candle pattern required")
+            elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bearish":
+                debug_print("Range sell rejected: MACD confirmation required")
             else:
                 signal = "sell"
                 strength = 0.85
