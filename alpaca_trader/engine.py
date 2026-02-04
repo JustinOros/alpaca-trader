@@ -143,6 +143,10 @@ if SHORT_WINDOW >= LONG_WINDOW:
     logger.error(f"⚠️  Configuration error: SHORT_WINDOW ({SHORT_WINDOW}) must be less than LONG_WINDOW ({LONG_WINDOW})")
     sys.exit(1)
 
+REQUIRE_CASH_ACCOUNT = bool(config.get("REQUIRE_CASH_ACCOUNT", True))
+T1_SETTLEMENT_ENABLED = bool(config.get("T1_SETTLEMENT_ENABLED", True))
+CASH_RESERVE_PCT = float(config.get("CASH_RESERVE_PCT", 0.1))
+
 try:
     test_client = AlpacaClient(
         os.getenv("APCA_API_KEY_ID"),
@@ -237,9 +241,6 @@ RSI_RANGE_OVERSOLD = float(config.get("RSI_RANGE_OVERSOLD", 30))
 RSI_RANGE_OVERBOUGHT = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
 REQUIRE_MA_CROSSOVER = bool(config.get("REQUIRE_MA_CROSSOVER", True))
 CROSSOVER_LOOKBACK = int(config.get("CROSSOVER_LOOKBACK", 5))
-REQUIRE_CASH_ACCOUNT = bool(config.get("REQUIRE_CASH_ACCOUNT", True))
-T1_SETTLEMENT_ENABLED = bool(config.get("T1_SETTLEMENT_ENABLED", True))
-CASH_RESERVE_PCT = float(config.get("CASH_RESERVE_PCT", 0.1))
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
