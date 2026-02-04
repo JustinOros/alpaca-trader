@@ -305,7 +305,11 @@ def submit_market_buy(symbol, position_size):
         if execution_price:
             logger.info(f"🟢  BUY {symbol} @ ${execution_price:.2f}")
             debug_print(f"Buy order filled @ ${execution_price:.2f}")
-        return execution_price
+            return execution_price
+        else:
+            logger.warning(f"Buy order returned no execution price")
+            debug_print(f"Buy order returned None")
+            return None
     except Exception as e:
         logger.error(f"Buy order failed: {e}")
         debug_print(f"Buy order failed: {e}")
@@ -337,13 +341,18 @@ def submit_limit_buy(symbol, position_size, limit_price):
         if execution_price:
             logger.info(f"🟢  BUY {symbol} @ ${execution_price:.2f}")
             debug_print(f"Limit buy filled @ ${execution_price:.2f}")
+            return execution_price
         else:
             debug_print("Limit order timeout, attempting market order")
             execution_price = api.place_order(symbol, "buy", position_size, None, LIMIT_ORDER_TIMEOUT)
             if execution_price:
                 logger.info(f"🟢  BUY {symbol} @ ${execution_price:.2f} (market)")
-                debug_print(f"Market buy filled @ ${execution_price:.2f}")
-        return execution_price
+                debug_print(f"Market order filled @ ${execution_price:.2f}")
+                return execution_price
+            else:
+                logger.warning(f"Market order fallback also failed")
+                debug_print(f"Market order fallback returned None")
+                return None
     except Exception as e:
         logger.error(f"Buy order failed: {e}")
         debug_print(f"Buy order failed: {e}")
@@ -356,7 +365,11 @@ def submit_short_sell(symbol, position_size):
         if execution_price:
             logger.info(f"🔴  SHORT {symbol} @ ${execution_price:.2f}")
             debug_print(f"Short sell filled @ ${execution_price:.2f}")
-        return execution_price
+            return execution_price
+        else:
+            logger.warning(f"Short sell returned no execution price")
+            debug_print(f"Short sell returned None")
+            return None
     except Exception as e:
         logger.error(f"Short sell failed: {e}")
         debug_print(f"Short sell failed: {e}")
@@ -369,13 +382,18 @@ def submit_limit_short_sell(symbol, position_size, limit_price):
         if execution_price:
             logger.info(f"🔴  SHORT {symbol} @ ${execution_price:.2f}")
             debug_print(f"Limit short filled @ ${execution_price:.2f}")
+            return execution_price
         else:
             debug_print("Limit order timeout, attempting market order")
             execution_price = api.place_order(symbol, "sell", position_size, None, LIMIT_ORDER_TIMEOUT)
             if execution_price:
                 logger.info(f"🔴  SHORT {symbol} @ ${execution_price:.2f} (market)")
                 debug_print(f"Market short filled @ ${execution_price:.2f}")
-        return execution_price
+                return execution_price
+            else:
+                logger.warning(f"Market order fallback also failed")
+                debug_print(f"Market order fallback returned None")
+                return None
     except Exception as e:
         logger.error(f"Short sell failed: {e}")
         debug_print(f"Short sell failed: {e}")
@@ -555,6 +573,10 @@ def advanced_signal_generator(symbol):
 
 def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, position_type):
     debug_print(f"Checking scale out: entry=${entry_price:.2f}, current=${current_price:.2f}")
+    
+    if entry_price <= 0:
+        debug_print("Invalid entry_price, skipping scale out")
+        return False
     
     if position_type == 'long':
         profit_pct = ((current_price - entry_price) / entry_price) * 100
@@ -828,7 +850,11 @@ def main():
                                 stop_loss = signal_stop_loss
                                 position_active = True
                                 position_type = 'long' if signal == 'buy' else 'short'
-                                risk_amount = abs(entry_price - stop_loss) / entry_price
+                                
+                                if entry_price > 0:
+                                    risk_amount = abs(entry_price - stop_loss) / entry_price
+                                else:
+                                    risk_amount = 0
                                 
                                 logger.info(f"    Entry=${entry_price:.2f}, Stop=${stop_loss:.2f}, Risk={risk_amount:.2%}")
                                 logger.info(f"    Regime={regime}, Strength={strength:.2f}, Trade #{trade_count} ({trades_today}/{MAX_TRADES_PER_DAY})")
@@ -856,7 +882,10 @@ def main():
                     status_msg = f"⏱️  {current_time} | {position_status} | {regime.upper()}"
                     
                     if position_active:
-                        pnl_pct = ((current_price - entry_price) / entry_price) * 100 if position_type == 'long' else ((entry_price - current_price) / entry_price) * 100
+                        if entry_price > 0:
+                            pnl_pct = ((current_price - entry_price) / entry_price) * 100 if position_type == 'long' else ((entry_price - current_price) / entry_price) * 100
+                        else:
+                            pnl_pct = 0
                         status_msg += f" | PnL: {pnl_pct:+.2f}%"
                     
                     status_msg += f" | H:{hourly_trend} | VIX:{vix_level:.1f} | {trades_today}/{MAX_TRADES_PER_DAY}"
