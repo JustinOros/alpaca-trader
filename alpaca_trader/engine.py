@@ -206,6 +206,17 @@ api = AlpacaClient(
     api_version='v2'
 )
 
+class SignalState:
+    def __init__(self):
+        self.last_bullish_crossover_bar = -999
+        self.last_bearish_crossover_bar = -999
+    
+    def reset(self):
+        self.last_bullish_crossover_bar = -999
+        self.last_bearish_crossover_bar = -999
+
+signal_state = SignalState()
+
 def debug_print(message):
     if DEBUG_MODE:
         debug_logger.debug(f"🔎  {message}")
@@ -426,28 +437,23 @@ def advanced_signal_generator(symbol):
     bearish_crossover = False
     
     if REQUIRE_MA_CROSSOVER and len(bars) >= LONG_WINDOW + CROSSOVER_LOOKBACK:
-        if not hasattr(advanced_signal_generator, 'last_bullish_crossover_bar'):
-            advanced_signal_generator.last_bullish_crossover_bar = -999
-        if not hasattr(advanced_signal_generator, 'last_bearish_crossover_bar'):
-            advanced_signal_generator.last_bearish_crossover_bar = -999
-        
         current_bar_index = len(bars) - 1
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
             bar_index = current_bar_index - i
             if short_ma_series.iloc[-i-1] <= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] > long_ma_series.iloc[-i]:
-                if bar_index > advanced_signal_generator.last_bullish_crossover_bar:
+                if bar_index > signal_state.last_bullish_crossover_bar:
                     bullish_crossover = True
-                    advanced_signal_generator.last_bullish_crossover_bar = bar_index
+                    signal_state.last_bullish_crossover_bar = bar_index
                     debug_print(f"Bullish crossover detected {i} bars ago")
                 break
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
             bar_index = current_bar_index - i
             if short_ma_series.iloc[-i-1] >= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] < long_ma_series.iloc[-i]:
-                if bar_index > advanced_signal_generator.last_bearish_crossover_bar:
+                if bar_index > signal_state.last_bearish_crossover_bar:
                     bearish_crossover = True
-                    advanced_signal_generator.last_bearish_crossover_bar = bar_index
+                    signal_state.last_bearish_crossover_bar = bar_index
                     debug_print(f"Bearish crossover detected {i} bars ago")
                 break
     
@@ -647,10 +653,7 @@ def main():
                 trades_today = 0
                 total_pnl = 0
                 
-                if hasattr(advanced_signal_generator, 'last_bullish_crossover_bar'):
-                    delattr(advanced_signal_generator, 'last_bullish_crossover_bar')
-                if hasattr(advanced_signal_generator, 'last_bearish_crossover_bar'):
-                    delattr(advanced_signal_generator, 'last_bearish_crossover_bar')
+                signal_state.reset()
                 
                 try:
                     existing_position = api.get_position(SYMBOL)

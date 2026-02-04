@@ -64,7 +64,7 @@ class AlpacaClient:
             price_source = limit_price
         else:
             price_source = bid_price if side == "buy" else ask_price
-        if price_source is None:
+        if price_source is None or price_source <= 0:
             return None
         shares = int(notional / price_source)
         if shares == 0:
@@ -83,7 +83,11 @@ class AlpacaClient:
             return None
         order = self.submit_order(symbol=symbol, qty=shares, side=side, type="market", time_in_force="day")
         status = self.get_order(order.id)
+        timeout = 30
+        start_time = time.time()
         while status.status not in {"filled", "cancelled", "expired", "rejected"}:
+            if time.time() - start_time > timeout:
+                return None
             time.sleep(0.5)
             status = self.get_order(order.id)
         if status.status == "filled":
