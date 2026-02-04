@@ -99,4 +99,3 @@ def get_vix(client: AlpacaClient, symbol: str, use_vix_filter: bool):
         logger.warning(f"Could not calculate volatility: {e}")
     logger.warning("VIX data unavailable, skipping VIX filter for this iteration")
     return 0
-    return 0

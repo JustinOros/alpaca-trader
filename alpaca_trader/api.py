@@ -61,6 +61,12 @@ class AlpacaClient:
                 return None
             bid_price = getattr(quote, 'bid_price', None)
             ask_price = getattr(quote, 'ask_price', None)
+            
+            if bid_price is None or ask_price is None:
+                return None
+            if bid_price <= 0 or ask_price <= 0:
+                return None
+            
             if limit_price:
                 price_source = limit_price
             else:

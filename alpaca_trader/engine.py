@@ -1076,7 +1076,7 @@ def main():
                     status_msg = f"⏱️  {current_time} | {position_status} | {regime.upper()}"
                     
                     if position_active:
-                        if entry_price > 0:
+                        if entry_price > 0 and current_price > 0:
                             pnl_pct = ((current_price - entry_price) / entry_price) * 100 if position_type == 'long' else ((entry_price - current_price) / entry_price) * 100
                         else:
                             pnl_pct = 0
