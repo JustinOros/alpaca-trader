@@ -16,6 +16,17 @@ from .filters import check_volume, check_candle_pattern, check_macd_confirmation
 from .filters import check_multiframe_confluence
 from .utils import EASTERN, seconds_to_human_readable
 
+BARS_FOR_200_SMA = 210
+BARS_FOR_SIGNAL = 200
+BARS_FOR_REGIME = 50
+BARS_FOR_ATR = 50
+MIN_BARS_FOR_ATR = 14
+VOLUME_LOOKBACK = 20
+DEFAULT_STOP_LOSS_PCT = 0.02
+VIX_LOOKBACK_DAYS = 5
+SPY_VOLATILITY_LOOKBACK = 20
+VOLATILITY_ANNUALIZATION_FACTOR = 252
+
 SCRIPT_DIR = Path(__file__).parent
 LOG_PATH = SCRIPT_DIR / "trading.log"
 DEBUG_LOG_PATH = SCRIPT_DIR / "debug.log"
@@ -327,6 +338,11 @@ class SignalState:
         self.last_bearish_crossover_bar = -999
 
 class PositionState:
+    """
+    Tracks position state for profit taking and stop management.
+    NOTE: This bot runs single-threaded - no locks needed.
+    If extending to multi-threaded, add threading.Lock() protection.
+    """
     def __init__(self):
         self.target_1_hit = False
         self.trailing_stop = None
@@ -591,7 +607,7 @@ def calculate_position_size(equity, stop_loss, current_price):
 
 def advanced_signal_generator(symbol):
     debug_print(f"Generating signal for {symbol}")
-    bars = get_recent_bars(symbol, 200)
+    bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
     if bars is None or len(bars) < LONG_WINDOW:
         debug_print("Insufficient data for signal generation")
         return None, 0, 0, None
