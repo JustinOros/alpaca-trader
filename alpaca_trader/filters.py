@@ -1,8 +1,11 @@
 import pandas as pd
 from datetime import datetime
+import logging
 from .indicators import ema, sma, rsi, adx, atr, bollinger, macd
 from .api import AlpacaClient
 from .utils import EASTERN
+
+logger = logging.getLogger(__name__)
 
 def check_volume(bars: pd.DataFrame, multiplier: float):
     if len(bars) < 20 or "volume" not in bars.columns:
@@ -84,15 +87,16 @@ def get_vix(client: AlpacaClient, symbol: str, use_vix_filter: bool):
         if len(vix) > 0:
             return vix["close"].iloc[-1]
     except Exception as e:
-        print(f"Warning: VIX data unavailable: {e}")
+        logger.warning(f"VIX data unavailable: {e}")
     try:
         spy = client.get_bars(symbol, "1Day", limit=20)
         if len(spy) >= 20:
             returns = spy["close"].pct_change()
             calculated_vix = returns.std() * (252 ** 0.5) * 100
-            print(f"Using calculated volatility as VIX proxy: {calculated_vix:.1f}")
+            logger.info(f"Using calculated volatility as VIX proxy: {calculated_vix:.1f}")
             return calculated_vix
     except Exception as e:
-        print(f"Warning: Could not calculate volatility: {e}")
-    print("Warning: VIX data unavailable, skipping VIX filter for this iteration")
+        logger.warning(f"Could not calculate volatility: {e}")
+    logger.warning("VIX data unavailable, skipping VIX filter for this iteration")
+    return 0
     return 0
