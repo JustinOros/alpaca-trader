@@ -441,21 +441,23 @@ def advanced_signal_generator(symbol):
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
             bar_index = current_bar_index - i
-            if short_ma_series.iloc[-i-1] <= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] > long_ma_series.iloc[-i]:
-                if bar_index > signal_state.last_bullish_crossover_bar:
-                    bullish_crossover = True
-                    signal_state.last_bullish_crossover_bar = bar_index
-                    debug_print(f"Bullish crossover detected {i} bars ago")
-                break
+            if bar_index >= 1 and (i + 1) < len(short_ma_series):
+                if short_ma_series.iloc[-i-1] <= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] > long_ma_series.iloc[-i]:
+                    if bar_index > signal_state.last_bullish_crossover_bar:
+                        bullish_crossover = True
+                        signal_state.last_bullish_crossover_bar = bar_index
+                        debug_print(f"Bullish crossover detected {i} bars ago")
+                    break
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
             bar_index = current_bar_index - i
-            if short_ma_series.iloc[-i-1] >= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] < long_ma_series.iloc[-i]:
-                if bar_index > signal_state.last_bearish_crossover_bar:
-                    bearish_crossover = True
-                    signal_state.last_bearish_crossover_bar = bar_index
-                    debug_print(f"Bearish crossover detected {i} bars ago")
-                break
+            if bar_index >= 1 and (i + 1) < len(short_ma_series):
+                if short_ma_series.iloc[-i-1] >= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] < long_ma_series.iloc[-i]:
+                    if bar_index > signal_state.last_bearish_crossover_bar:
+                        bearish_crossover = True
+                        signal_state.last_bearish_crossover_bar = bar_index
+                        debug_print(f"Bearish crossover detected {i} bars ago")
+                    break
     
     rsi_val = rsi(closes, 14).iloc[-1]
     adx_val = adx(highs, lows, closes).iloc[-1]
@@ -500,7 +502,7 @@ def advanced_signal_generator(symbol):
                 position_type = "long"
                 debug_print(f"BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
         
-        if short_ma < long_ma and rsi_val < RSI_SELL_MAX:
+        elif short_ma < long_ma and rsi_val > RSI_SELL_MIN and rsi_val < RSI_SELL_MAX:
             if REQUIRE_MA_CROSSOVER and not bearish_crossover:
                 debug_print("Bearish signal rejected: no recent crossover")
             elif REQUIRE_CANDLE_PATTERN and not bearish_pattern:
@@ -525,7 +527,7 @@ def advanced_signal_generator(symbol):
                 position_type = "long"
                 debug_print(f"Range BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
         
-        if current_price >= upper.iloc[-1] and rsi_val > RSI_RANGE_OVERBOUGHT:
+        elif current_price >= upper.iloc[-1] and rsi_val > RSI_RANGE_OVERBOUGHT:
             if REQUIRE_CANDLE_PATTERN and not bearish_pattern:
                 debug_print("Range sell rejected: candle pattern required")
             else:
