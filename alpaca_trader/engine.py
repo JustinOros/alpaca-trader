@@ -1041,6 +1041,11 @@ def main():
                                 
                                 position_state.trailing_stop = stop_loss
                                 debug_print(f"Trailing stop initialized: ${stop_loss:.2f}")
+                            else:
+                                logger.error(f"❌  Order execution failed: {signal.upper()} ${position_size:.2f}")
+                                logger.error(f"    Possible reasons: Order rejected, timeout, or market closed")
+                                debug_print(f"Order execution returned None - order not filled")
+                                signal = None
                         else:
                             logger.warning(f"⚠️  Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
                             debug_print(f"Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
