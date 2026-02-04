@@ -215,7 +215,17 @@ class SignalState:
         self.last_bullish_crossover_bar = -999
         self.last_bearish_crossover_bar = -999
 
+class PositionState:
+    def __init__(self):
+        self.target_1_hit = False
+        self.trailing_stop = None
+    
+    def reset(self):
+        self.target_1_hit = False
+        self.trailing_stop = None
+
 signal_state = SignalState()
+position_state = PositionState()
 
 def debug_print(message):
     if DEBUG_MODE:
@@ -556,10 +566,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
     target_1_pct = risk_pct * PROFIT_TARGET_1
     target_2_pct = risk_pct * PROFIT_TARGET_2
     
-    if not hasattr(scale_out_profit_taking, "target_1_hit"):
-        scale_out_profit_taking.target_1_hit = False
-    
-    if profit_pct >= target_1_pct and not scale_out_profit_taking.target_1_hit:
+    if profit_pct >= target_1_pct and not position_state.target_1_hit:
         qty = current_position_qty(symbol)
         if qty != 0:
             half_qty = int(qty / 2)
@@ -569,7 +576,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
                     submit_market_sell(symbol, half_qty)
                 else:
                     submit_buy_to_cover(symbol, half_qty)
-                scale_out_profit_taking.target_1_hit = True
+                position_state.target_1_hit = True
                 logger.info(f"💰  Partial profit @ {profit_pct:.2f}% ({half_qty} shares)")
                 debug_print(f"Partial profit taken: {half_qty} shares @ {profit_pct:.2f}%")
     
@@ -590,8 +597,8 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
 def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, position_type):
     debug_print(f"Checking trailing stop: entry=${entry_price:.2f}, current=${current_price:.2f}")
     
-    if not hasattr(atr_based_trailing_stop, "trailing_stop"):
-        atr_based_trailing_stop.trailing_stop = initial_stop
+    if position_state.trailing_stop is None:
+        position_state.trailing_stop = initial_stop
         debug_print(f"Initialized trailing stop: ${initial_stop:.2f}")
     
     bars = get_recent_bars(symbol, 50)
@@ -603,21 +610,21 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
     
     if position_type == 'long':
         new_stop = current_price - (current_atr * ATR_STOP_MULTIPLIER)
-        if new_stop > atr_based_trailing_stop.trailing_stop:
-            debug_print(f"Updating trailing stop: ${atr_based_trailing_stop.trailing_stop:.2f} -> ${new_stop:.2f}")
-            atr_based_trailing_stop.trailing_stop = new_stop
+        if new_stop > position_state.trailing_stop:
+            debug_print(f"Updating trailing stop: ${position_state.trailing_stop:.2f} -> ${new_stop:.2f}")
+            position_state.trailing_stop = new_stop
         
-        if current_price <= atr_based_trailing_stop.trailing_stop:
-            debug_print(f"Long stop hit: ${current_price:.2f} <= ${atr_based_trailing_stop.trailing_stop:.2f}")
+        if current_price <= position_state.trailing_stop:
+            debug_print(f"Long stop hit: ${current_price:.2f} <= ${position_state.trailing_stop:.2f}")
             return True
     else:
         new_stop = current_price + (current_atr * ATR_STOP_MULTIPLIER)
-        if new_stop < atr_based_trailing_stop.trailing_stop:
-            debug_print(f"Updating trailing stop: ${atr_based_trailing_stop.trailing_stop:.2f} -> ${new_stop:.2f}")
-            atr_based_trailing_stop.trailing_stop = new_stop
+        if new_stop < position_state.trailing_stop:
+            debug_print(f"Updating trailing stop: ${position_state.trailing_stop:.2f} -> ${new_stop:.2f}")
+            position_state.trailing_stop = new_stop
         
-        if current_price >= atr_based_trailing_stop.trailing_stop:
-            debug_print(f"Short stop hit: ${current_price:.2f} >= ${atr_based_trailing_stop.trailing_stop:.2f}")
+        if current_price >= position_state.trailing_stop:
+            debug_print(f"Short stop hit: ${current_price:.2f} >= ${position_state.trailing_stop:.2f}")
             return True
     
     return False
@@ -656,6 +663,7 @@ def main():
                 total_pnl = 0
                 
                 signal_state.reset()
+                position_state.reset()
                 
                 try:
                     existing_position = api.get_position(SYMBOL)
@@ -684,11 +692,11 @@ def main():
                         
                         unrealized_plpc = float(existing_position.unrealized_plpc) if hasattr(existing_position, 'unrealized_plpc') else 0
                         if unrealized_plpc > 0.01:
-                            scale_out_profit_taking.target_1_hit = True
+                            position_state.target_1_hit = True
                             debug_print("Assuming target 1 already hit based on positive P&L")
                         
                         if USE_TRAILING_STOP:
-                            atr_based_trailing_stop.trailing_stop = stop_loss
+                            position_state.trailing_stop = stop_loss
                 except Exception as e:
                     debug_print(f"No existing position found or error during recovery: {e}")
                 
@@ -730,14 +738,7 @@ def main():
                                         submit_buy_to_cover(SYMBOL, abs(qty))
                                     position_active = False
                                     trade_count += 1
-                                    try:
-                                        delattr(scale_out_profit_taking, "target_1_hit")
-                                    except AttributeError:
-                                        pass
-                                    try:
-                                        delattr(atr_based_trailing_stop, "trailing_stop")
-                                    except AttributeError:
-                                        pass
+                                    position_state.reset()
                                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                     time.sleep(POLL_INTERVAL)
                                     continue
@@ -753,14 +754,7 @@ def main():
                                 total_pnl += trade_pnl
                                 logger.info(f"✅  Position closed (PnL: ${trade_pnl:.2f})")
                                 debug_print(f"Position fully closed, PnL: ${trade_pnl:.2f}")
-                                try:
-                                    delattr(scale_out_profit_taking, "target_1_hit")
-                                except AttributeError:
-                                    pass
-                                try:
-                                    delattr(atr_based_trailing_stop, "trailing_stop")
-                                except AttributeError:
-                                    pass
+                                position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                 time.sleep(POLL_INTERVAL)
                                 continue
@@ -776,14 +770,7 @@ def main():
                                 trade_count += 1
                                 logger.info("🛑  Stop hit")
                                 debug_print("Stop hit, position closed")
-                                try:
-                                    delattr(scale_out_profit_taking, "target_1_hit")
-                                except AttributeError:
-                                    pass
-                                try:
-                                    delattr(atr_based_trailing_stop, "trailing_stop")
-                                except AttributeError:
-                                    pass
+                                position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                 time.sleep(POLL_INTERVAL)
                                 continue
@@ -843,7 +830,7 @@ def main():
                                 logger.info(f"    Regime={regime}, Strength={strength:.2f}, Trade #{trade_count} ({trades_today}/{MAX_TRADES_PER_DAY})")
                                 debug_print(f"Trade executed: entry=${entry_price:.2f}, stop=${stop_loss:.2f}, regime={regime}")
                                 
-                                atr_based_trailing_stop.trailing_stop = stop_loss
+                                position_state.trailing_stop = stop_loss
                                 debug_print(f"Trailing stop initialized: ${stop_loss:.2f}")
                         else:
                             logger.warning(f"⚠️  Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
