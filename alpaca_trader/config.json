@@ -8,7 +8,7 @@
     "MIN_NOTIONAL": 1.0,
     "POLL_INTERVAL": 60,
     "MAX_DRAWDOWN": 0.05,
-    "PDT_RULE": false,
+    "PDT_RULE": true,
     "USE_TRAILING_STOP": true,
     "PROFIT_TARGET_1": 2.0,
     "PROFIT_TARGET_2": 4.0,
@@ -41,7 +41,7 @@
     "REQUIRE_MACD_CONFIRMATION": false,
     "MIN_RISK_REWARD": 2.0,
     "PULLBACK_PERCENTAGE": 0.382,
-    "ENABLE_SHORT_SELLING": false,
+    "ENABLE_SHORT_SELLING": true,
     "RSI_BUY_MAX": 55,
     "RSI_SELL_MIN": 45,
     "RSI_SELL_MAX": 70,
@@ -49,7 +49,7 @@
     "RSI_RANGE_OVERBOUGHT": 70,
     "REQUIRE_MA_CROSSOVER": true,
     "CROSSOVER_LOOKBACK": 5,
-    "REQUIRE_CASH_ACCOUNT": true,
-    "T1_SETTLEMENT_ENABLED": true,
-    "CASH_RESERVE_PCT": 0.1
+    "REQUIRE_CASH_ACCOUNT": false,
+    "T1_SETTLEMENT_ENABLED": false,
+    "CASH_RESERVE_PCT": 0.0
 }

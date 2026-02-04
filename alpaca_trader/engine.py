@@ -157,40 +157,64 @@ try:
     account = test_client.get_account()
     logger.info("✅  API credentials validated")
     
-    if REQUIRE_CASH_ACCOUNT:
-        account_type = getattr(account, 'account_blocked', False)
-        is_pattern_day_trader = getattr(account, 'pattern_day_trader', False)
-        daytrade_count = getattr(account, 'daytrade_count', 0)
+    equity = float(getattr(account, 'equity', 0))
+    buying_power = float(getattr(account, 'buying_power', 0))
+    cash = float(getattr(account, 'cash', 0))
+    is_pattern_day_trader = getattr(account, 'pattern_day_trader', False)
+    daytrade_count = getattr(account, 'daytrade_count', 0)
+    account_status = getattr(account, 'status', 'UNKNOWN')
+    
+    is_paper_account = "paper-api.alpaca.markets" in os.getenv("APCA_API_BASE_URL", "")
+    
+    logger.info(f"💵  Account Info:")
+    logger.info(f"    Type: {'PAPER' if is_paper_account else 'LIVE'}")
+    logger.info(f"    Equity: ${equity:.2f}")
+    logger.info(f"    Cash: ${cash:.2f}")
+    logger.info(f"    Buying Power: ${buying_power:.2f}")
+    logger.info(f"    PDT Status: {is_pattern_day_trader}")
+    logger.info(f"    Daytrade Count: {daytrade_count}")
+    
+    if account_status != 'ACTIVE':
+        logger.error(f"⚠️  Account status is {account_status}, must be ACTIVE")
+        sys.exit(1)
+    
+    is_margin_account = buying_power > cash * 1.5
+    has_minimum_equity = equity >= 25000
+    
+    if not is_paper_account and not has_minimum_equity:
+        if is_margin_account:
+            logger.warning("⚠️  WARNING: LIVE margin account with equity < $25,000")
+            logger.warning("    You should be using a CASH account to avoid PDT restrictions")
+            logger.warning("    Convert to cash account in your Alpaca dashboard")
         
-        account_status = getattr(account, 'status', 'UNKNOWN')
-        if account_status != 'ACTIVE':
-            logger.error(f"⚠️  Account status is {account_status}, must be ACTIVE")
+        if ENABLE_SHORT_SELLING:
+            logger.error("⚠️  SHORT SELLING DISABLED: Live account with equity < $25,000 cannot short")
+            logger.error("    Set ENABLE_SHORT_SELLING to False in config.json")
+            logger.error("    Or increase account equity to $25,000+")
             sys.exit(1)
         
-        buying_power = float(getattr(account, 'buying_power', 0))
-        cash = float(getattr(account, 'cash', 0))
+        logger.info("✅  Short selling disabled for live account < $25k")
         
-        logger.info(f"💵  Account Type Check:")
-        logger.info(f"    Cash: ${cash:.2f}")
-        logger.info(f"    Buying Power: ${buying_power:.2f}")
-        logger.info(f"    PDT Status: {is_pattern_day_trader}")
-        logger.info(f"    Daytrade Count: {daytrade_count}")
+        if T1_SETTLEMENT_ENABLED:
+            logger.info(f"✅  T+1 settlement tracking enabled")
+            logger.info(f"    Keeping {CASH_RESERVE_PCT*100:.0f}% cash reserve for safety")
+    
+    elif REQUIRE_CASH_ACCOUNT:
+        if is_margin_account:
+            logger.warning("⚠️  WARNING: Margin account detected")
+            logger.warning("    REQUIRE_CASH_ACCOUNT is True but buying power exceeds cash")
+            logger.warning("    Set REQUIRE_CASH_ACCOUNT to False in config.json for margin accounts")
         
-        if buying_power > cash * 1.5:
-            logger.warning("⚠️  WARNING: Buying power significantly exceeds cash")
-            logger.warning("    This may indicate a MARGIN account, not a CASH account")
-            logger.warning("    Please verify your account type in Alpaca dashboard")
-            logger.warning("    For cash accounts under $25k, you should NOT have margin enabled")
-            if REQUIRE_CASH_ACCOUNT:
-                logger.error("⚠️  REQUIRE_CASH_ACCOUNT is True but account appears to be margin")
-                logger.error("    Set REQUIRE_CASH_ACCOUNT to False in config.json to bypass this check")
-                sys.exit(1)
-        
-        logger.info("✅  Cash account verified")
+        logger.info("✅  Cash account mode enabled")
         
         if T1_SETTLEMENT_ENABLED:
             logger.info("✅  T+1 settlement tracking enabled")
             logger.info(f"    Keeping {CASH_RESERVE_PCT*100:.0f}% cash reserve for safety")
+    
+    if is_paper_account:
+        logger.info("📝  Paper trading account - all restrictions relaxed")
+    elif has_minimum_equity:
+        logger.info(f"✅  Equity ${equity:.2f} >= $25,000 - full trading enabled")
     
 except Exception as e:
     logger.error(f"⚠️  Invalid API credentials: {e}")
