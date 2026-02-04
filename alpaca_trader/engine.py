@@ -300,6 +300,9 @@ def get_bid_ask(symbol):
 
 def submit_market_buy(symbol, position_size):
     debug_print(f"Submitting market buy order: {symbol}, size=${position_size:.2f}")
+    if position_size <= 0:
+        debug_print(f"Invalid position size: ${position_size:.2f}")
+        return None
     try:
         execution_price = api.place_order(symbol, "buy", position_size, None, LIMIT_ORDER_TIMEOUT)
         if execution_price:
@@ -319,9 +322,17 @@ def submit_market_sell(symbol, qty):
     debug_print(f"Submitting market sell order: {symbol}, qty={qty}")
     try:
         shares = int(qty)
+        if shares <= 0:
+            debug_print(f"Invalid quantity: {shares}")
+            return None
         order = api.submit_order(symbol=symbol, qty=shares, side="sell", type="market", time_in_force="day")
         status = api.get_order(order.id)
+        timeout = 30
+        start_time = time.time()
         while status.status not in {"filled", "cancelled", "expired", "rejected"}:
+            if time.time() - start_time > timeout:
+                debug_print("Order status check timeout")
+                return None
             time.sleep(0.5)
             status = api.get_order(order.id)
         if status.status == "filled":
@@ -336,6 +347,9 @@ def submit_market_sell(symbol, qty):
 
 def submit_limit_buy(symbol, position_size, limit_price):
     debug_print(f"Submitting limit buy: {symbol}, size=${position_size:.2f}, limit=${limit_price:.2f}")
+    if position_size <= 0:
+        debug_print(f"Invalid position size: ${position_size:.2f}")
+        return None
     try:
         execution_price = api.place_order(symbol, "buy", position_size, limit_price, LIMIT_ORDER_TIMEOUT)
         if execution_price:
@@ -360,6 +374,9 @@ def submit_limit_buy(symbol, position_size, limit_price):
 
 def submit_short_sell(symbol, position_size):
     debug_print(f"Submitting short sell: {symbol}, size=${position_size:.2f}")
+    if position_size <= 0:
+        debug_print(f"Invalid position size: ${position_size:.2f}")
+        return None
     try:
         execution_price = api.place_order(symbol, "sell", position_size, None, LIMIT_ORDER_TIMEOUT)
         if execution_price:
@@ -377,6 +394,9 @@ def submit_short_sell(symbol, position_size):
 
 def submit_limit_short_sell(symbol, position_size, limit_price):
     debug_print(f"Submitting limit short: {symbol}, size=${position_size:.2f}, limit=${limit_price:.2f}")
+    if position_size <= 0:
+        debug_print(f"Invalid position size: ${position_size:.2f}")
+        return None
     try:
         execution_price = api.place_order(symbol, "sell", position_size, limit_price, LIMIT_ORDER_TIMEOUT)
         if execution_price:
@@ -403,9 +423,17 @@ def submit_buy_to_cover(symbol, qty):
     debug_print(f"Submitting buy to cover: {symbol}, qty={qty}")
     try:
         shares = int(qty)
+        if shares <= 0:
+            debug_print(f"Invalid quantity: {shares}")
+            return None
         order = api.submit_order(symbol=symbol, qty=shares, side="buy", type="market", time_in_force="day")
         status = api.get_order(order.id)
+        timeout = 30
+        start_time = time.time()
         while status.status not in {"filled", "cancelled", "expired", "rejected"}:
+            if time.time() - start_time > timeout:
+                debug_print("Order status check timeout")
+                return None
             time.sleep(0.5)
             status = api.get_order(order.id)
         if status.status == "filled":
@@ -469,23 +497,29 @@ def advanced_signal_generator(symbol):
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
             bar_index = current_bar_index - i
-            if bar_index >= 1 and (i + 1) < len(short_ma_series):
-                if short_ma_series.iloc[-i-1] <= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] > long_ma_series.iloc[-i]:
-                    if bar_index > signal_state.last_bullish_crossover_bar:
-                        bullish_crossover = True
-                        signal_state.last_bullish_crossover_bar = bar_index
-                        debug_print(f"Bullish crossover detected {i} bars ago")
-                    break
+            if bar_index >= 1 and bar_index < len(bars) and (bar_index + 1) < len(bars):
+                idx_current = len(short_ma_series) - i
+                idx_prev = len(short_ma_series) - i - 1
+                if idx_prev >= 0 and idx_current < len(short_ma_series):
+                    if short_ma_series.iloc[idx_prev] <= long_ma_series.iloc[idx_prev] and short_ma_series.iloc[idx_current] > long_ma_series.iloc[idx_current]:
+                        if bar_index > signal_state.last_bullish_crossover_bar:
+                            bullish_crossover = True
+                            signal_state.last_bullish_crossover_bar = bar_index
+                            debug_print(f"Bullish crossover detected {i} bars ago")
+                        break
         
         for i in range(1, CROSSOVER_LOOKBACK + 1):
             bar_index = current_bar_index - i
-            if bar_index >= 1 and (i + 1) < len(short_ma_series):
-                if short_ma_series.iloc[-i-1] >= long_ma_series.iloc[-i-1] and short_ma_series.iloc[-i] < long_ma_series.iloc[-i]:
-                    if bar_index > signal_state.last_bearish_crossover_bar:
-                        bearish_crossover = True
-                        signal_state.last_bearish_crossover_bar = bar_index
-                        debug_print(f"Bearish crossover detected {i} bars ago")
-                    break
+            if bar_index >= 1 and bar_index < len(bars) and (bar_index + 1) < len(bars):
+                idx_current = len(short_ma_series) - i
+                idx_prev = len(short_ma_series) - i - 1
+                if idx_prev >= 0 and idx_current < len(short_ma_series):
+                    if short_ma_series.iloc[idx_prev] >= long_ma_series.iloc[idx_prev] and short_ma_series.iloc[idx_current] < long_ma_series.iloc[idx_current]:
+                        if bar_index > signal_state.last_bearish_crossover_bar:
+                            bearish_crossover = True
+                            signal_state.last_bearish_crossover_bar = bar_index
+                            debug_print(f"Bearish crossover detected {i} bars ago")
+                        break
     
     rsi_val = rsi(closes, 14).iloc[-1]
     adx_val = adx(highs, lows, closes).iloc[-1]
@@ -630,7 +664,7 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
     
     current_atr = atr(bars['high'], bars['low'], bars['close']).iloc[-1]
     
-    if current_atr <= 0 or pd.isna(current_atr):
+    if current_atr <= 0 or np.isnan(current_atr):
         debug_print(f"Invalid ATR value: {current_atr}, using initial stop")
         return False
     
@@ -726,8 +760,17 @@ def main():
                 except Exception as e:
                     debug_print(f"No existing position found or error during recovery: {e}")
                 
+                retry_count = 0
+                max_retries = 3
+                
                 while clock.is_open:
-                    clock = api.get_clock()
+                    try:
+                        clock = api.get_clock()
+                    except Exception as e:
+                        debug_print(f"Error fetching clock: {e}")
+                        time.sleep(10)
+                        continue
+                    
                     current_equity = fetch_equity()
                     drawdown = (opening_equity - current_equity) / opening_equity if opening_equity > 0 else 0
                     
@@ -741,10 +784,15 @@ def main():
                     
                     bars = get_recent_bars(SYMBOL, 10)
                     if bars is None or len(bars) == 0:
-                        debug_print("No bars available, retrying...")
+                        retry_count += 1
+                        debug_print(f"No bars available, retry {retry_count}/{max_retries}")
+                        if retry_count >= max_retries:
+                            debug_print("Max retries reached, continuing with next iteration")
+                            retry_count = 0
                         time.sleep(30)
                         continue
                     
+                    retry_count = 0
                     current_price = bars['close'].iloc[-1]
                     vix_level = get_vix(api, SYMBOL, USE_VIX_FILTER)
                     
@@ -773,13 +821,6 @@ def main():
                             remaining_qty = current_position_qty(SYMBOL)
                             if remaining_qty == 0:
                                 position_active = False
-                                if position_type == 'long':
-                                    trade_pnl = (current_price - entry_price) * 100
-                                else:
-                                    trade_pnl = (entry_price - current_price) * 100
-                                total_pnl += trade_pnl
-                                logger.info(f"✅  Position closed (PnL: ${trade_pnl:.2f})")
-                                debug_print(f"Position fully closed, PnL: ${trade_pnl:.2f}")
                                 position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                 time.sleep(POLL_INTERVAL)
@@ -857,7 +898,7 @@ def main():
                                     risk_amount = 0
                                 
                                 logger.info(f"    Entry=${entry_price:.2f}, Stop=${stop_loss:.2f}, Risk={risk_amount:.2%}")
-                                logger.info(f"    Regime={regime}, Strength={strength:.2f}, Trade #{trade_count} ({trades_today}/{MAX_TRADES_PER_DAY})")
+                                logger.info(f"    Regime={regime}, Strength={strength:.2f}, Trade {trade_count} ({trades_today}/{MAX_TRADES_PER_DAY})")
                                 debug_print(f"Trade executed: entry=${entry_price:.2f}, stop=${stop_loss:.2f}, regime={regime}")
                                 
                                 position_state.trailing_stop = stop_loss
