@@ -51,7 +51,7 @@ DEFAULT_CONFIG = {
     "MIN_NOTIONAL": 1.0,
     "POLL_INTERVAL": 60,
     "MAX_DRAWDOWN": 0.08,
-    "PDT_RULE": True,
+    "PDT_RULE": False,
     "USE_TRAILING_STOP": True,
     "PROFIT_TARGET_1": 2.0,
     "PROFIT_TARGET_2": 4.0,
@@ -84,14 +84,17 @@ DEFAULT_CONFIG = {
     "REQUIRE_MACD_CONFIRMATION": False,
     "MIN_RISK_REWARD": 2.0,
     "PULLBACK_PERCENTAGE": 0.382,
-    "ENABLE_SHORT_SELLING": True,
+    "ENABLE_SHORT_SELLING": False,
     "RSI_BUY_MAX": 55,
     "RSI_SELL_MIN": 45,
     "RSI_SELL_MAX": 70,
     "RSI_RANGE_OVERSOLD": 30,
     "RSI_RANGE_OVERBOUGHT": 70,
     "REQUIRE_MA_CROSSOVER": True,
-    "CROSSOVER_LOOKBACK": 5
+    "CROSSOVER_LOOKBACK": 5,
+    "REQUIRE_CASH_ACCOUNT": True,
+    "T1_SETTLEMENT_ENABLED": True,
+    "CASH_RESERVE_PCT": 0.1
 }
 
 if not ENV_PATH.exists():
@@ -147,8 +150,44 @@ try:
         os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets"),
         api_version="v2"
     )
-    test_client.get_account()
+    account = test_client.get_account()
     logger.info("✅  API credentials validated")
+    
+    if REQUIRE_CASH_ACCOUNT:
+        account_type = getattr(account, 'account_blocked', False)
+        is_pattern_day_trader = getattr(account, 'pattern_day_trader', False)
+        daytrade_count = getattr(account, 'daytrade_count', 0)
+        
+        account_status = getattr(account, 'status', 'UNKNOWN')
+        if account_status != 'ACTIVE':
+            logger.error(f"⚠️  Account status is {account_status}, must be ACTIVE")
+            sys.exit(1)
+        
+        buying_power = float(getattr(account, 'buying_power', 0))
+        cash = float(getattr(account, 'cash', 0))
+        
+        logger.info(f"💵  Account Type Check:")
+        logger.info(f"    Cash: ${cash:.2f}")
+        logger.info(f"    Buying Power: ${buying_power:.2f}")
+        logger.info(f"    PDT Status: {is_pattern_day_trader}")
+        logger.info(f"    Daytrade Count: {daytrade_count}")
+        
+        if buying_power > cash * 1.5:
+            logger.warning("⚠️  WARNING: Buying power significantly exceeds cash")
+            logger.warning("    This may indicate a MARGIN account, not a CASH account")
+            logger.warning("    Please verify your account type in Alpaca dashboard")
+            logger.warning("    For cash accounts under $25k, you should NOT have margin enabled")
+            if REQUIRE_CASH_ACCOUNT:
+                logger.error("⚠️  REQUIRE_CASH_ACCOUNT is True but account appears to be margin")
+                logger.error("    Set REQUIRE_CASH_ACCOUNT to False in config.json to bypass this check")
+                sys.exit(1)
+        
+        logger.info("✅  Cash account verified")
+        
+        if T1_SETTLEMENT_ENABLED:
+            logger.info("✅  T+1 settlement tracking enabled")
+            logger.info(f"    Keeping {CASH_RESERVE_PCT*100:.0f}% cash reserve for safety")
+    
 except Exception as e:
     logger.error(f"⚠️  Invalid API credentials: {e}")
     logger.error("    Please check your .env file and ensure your Alpaca API keys are correct")
@@ -198,6 +237,9 @@ RSI_RANGE_OVERSOLD = float(config.get("RSI_RANGE_OVERSOLD", 30))
 RSI_RANGE_OVERBOUGHT = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
 REQUIRE_MA_CROSSOVER = bool(config.get("REQUIRE_MA_CROSSOVER", True))
 CROSSOVER_LOOKBACK = int(config.get("CROSSOVER_LOOKBACK", 5))
+REQUIRE_CASH_ACCOUNT = bool(config.get("REQUIRE_CASH_ACCOUNT", True))
+T1_SETTLEMENT_ENABLED = bool(config.get("T1_SETTLEMENT_ENABLED", True))
+CASH_RESERVE_PCT = float(config.get("CASH_RESERVE_PCT", 0.1))
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -205,6 +247,50 @@ api = AlpacaClient(
     os.getenv('APCA_API_BASE_URL'),
     api_version='v2'
 )
+
+class SettlementTracker:
+    def __init__(self):
+        self.pending_settlements = {}
+    
+    def add_trade(self, trade_date, amount):
+        settlement_date = self._get_next_trading_day(trade_date)
+        if settlement_date not in self.pending_settlements:
+            self.pending_settlements[settlement_date] = 0.0
+        self.pending_settlements[settlement_date] += amount
+        logger.info(f"💰  T+1: ${amount:.2f} settling on {settlement_date.strftime('%Y-%m-%d')}")
+        debug_print(f"Added ${amount:.2f} to settle on {settlement_date}")
+    
+    def _get_next_trading_day(self, date):
+        next_day = date + timedelta(days=1)
+        while next_day.weekday() >= 5:
+            next_day += timedelta(days=1)
+        return next_day.date()
+    
+    def settle_funds(self, current_date):
+        settled_amount = 0.0
+        current_date_only = current_date.date()
+        
+        dates_to_remove = []
+        for settlement_date, amount in self.pending_settlements.items():
+            if settlement_date <= current_date_only:
+                settled_amount += amount
+                dates_to_remove.append(settlement_date)
+        
+        for date in dates_to_remove:
+            del self.pending_settlements[date]
+        
+        if settled_amount > 0:
+            logger.info(f"✅  Settled ${settled_amount:.2f} on {current_date_only}")
+            debug_print(f"Settled ${settled_amount:.2f}")
+        
+        return settled_amount
+    
+    def get_pending_amount(self):
+        return sum(self.pending_settlements.values())
+    
+    def reset(self):
+        self.pending_settlements = {}
+
 
 class SignalState:
     def __init__(self):
@@ -239,10 +325,23 @@ def fetch_equity():
     debug_print(f"Current equity: ${equity:.2f}")
     return equity
 
-def fetch_buying_power():
+def fetch_buying_power(settlement_tracker=None):
     debug_print("Fetching buying power")
     account = api.get_account()
     bp = float(account.buying_power)
+    cash = float(account.cash)
+    
+    if T1_SETTLEMENT_ENABLED and settlement_tracker:
+        pending = settlement_tracker.get_pending_amount()
+        available_cash = cash - pending
+        
+        if CASH_RESERVE_PCT > 0:
+            reserve = cash * CASH_RESERVE_PCT
+            available_cash = max(0, available_cash - reserve)
+        
+        debug_print(f"Cash: ${cash:.2f}, Pending: ${pending:.2f}, Available: ${available_cash:.2f}")
+        return available_cash
+    
     debug_print(f"Buying power: ${bp:.2f}")
     return bp
 
@@ -713,6 +812,12 @@ def main():
                 opening_equity = fetch_equity()
                 logger.info(f"💵  Starting equity: ${opening_equity:.2f}")
                 
+                settlement_tracker = SettlementTracker()
+                
+                if T1_SETTLEMENT_ENABLED:
+                    current_date = datetime.now(EASTERN)
+                    settlement_tracker.settle_funds(current_date)
+                
                 position_active = False
                 entry_price = 0
                 entry_time = None
@@ -862,7 +967,7 @@ def main():
                     
                     if signal in ['buy', 'sell'] and not position_active:
                         debug_print(f"Signal detected: {signal}, executing trade...")
-                        buying_power = fetch_buying_power()
+                        buying_power = fetch_buying_power(settlement_tracker)
                         position_size = calculate_position_size(current_equity, signal_stop_loss, current_price)
                         
                         if buying_power >= position_size:
@@ -876,12 +981,9 @@ def main():
                                 else:
                                     execution_price = submit_market_buy(SYMBOL, position_size)
                             elif signal == 'sell':
-                                if USE_LIMIT_ORDERS:
-                                    bid, ask = get_bid_ask(SYMBOL)
-                                    limit_price = ask
-                                    execution_price = submit_limit_short_sell(SYMBOL, position_size, limit_price)
-                                else:
-                                    execution_price = submit_short_sell(SYMBOL, position_size)
+                                logger.warning("⚠️  Sell signal ignored - short selling not allowed with cash account")
+                                debug_print("Short selling blocked for cash account")
+                                signal = None
                             
                             if execution_price:
                                 trade_count += 1
@@ -891,6 +993,10 @@ def main():
                                 stop_loss = signal_stop_loss
                                 position_active = True
                                 position_type = 'long' if signal == 'buy' else 'short'
+                                
+                                if T1_SETTLEMENT_ENABLED and signal == 'buy':
+                                    trade_amount = position_size
+                                    settlement_tracker.add_trade(datetime.now(EASTERN), trade_amount)
                                 
                                 if entry_price > 0:
                                     risk_amount = abs(entry_price - stop_loss) / entry_price
@@ -906,6 +1012,11 @@ def main():
                         else:
                             logger.warning(f"⚠️  Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
                             debug_print(f"Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
+                            
+                            if T1_SETTLEMENT_ENABLED:
+                                pending = settlement_tracker.get_pending_amount()
+                                logger.info(f"    Pending settlement: ${pending:.2f}")
+                                debug_print(f"Funds tied up in T+1 settlement: ${pending:.2f}")
                     
                     position_status = f"{position_type.upper()}" if position_active else "FLAT"
                     
