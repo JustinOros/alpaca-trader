@@ -539,7 +539,7 @@ def log_indicators(timestamp, symbol, price, volume, rsi_val, adx_val, atr_val, 
             existing = pd.read_csv(INDICATORS_PATH)
             df = pd.concat([existing, df], ignore_index=True)
             cutoff_date = datetime.now(EASTERN) - timedelta(days=7)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
             df = df[df['timestamp'] > cutoff_date]
         
         df.to_csv(INDICATORS_PATH, index=False)
