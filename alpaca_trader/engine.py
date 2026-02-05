@@ -31,6 +31,10 @@ SCRIPT_DIR = Path(__file__).parent
 LOG_PATH = SCRIPT_DIR / "trading.log"
 DEBUG_LOG_PATH = SCRIPT_DIR / "debug.log"
 SESSION_STATE_PATH = SCRIPT_DIR / "session.csv"
+TRADES_PATH = SCRIPT_DIR / "trades.csv"
+SIGNALS_PATH = SCRIPT_DIR / "signals.csv"
+PERFORMANCE_PATH = SCRIPT_DIR / "performance.csv"
+INDICATORS_PATH = SCRIPT_DIR / "indicators.csv"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -414,6 +418,133 @@ def load_session_state():
     except Exception as e:
         debug_print(f"Failed to load session state: {e}")
         return None
+
+def log_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, shares, position_value, stop_loss, target_1, target_2, pnl_dollars, pnl_percent, hold_minutes, exit_reason, regime, signal_strength, rsi, adx, ma_spread, slippage):
+    try:
+        trade_data = {
+            'entry_time': entry_time.isoformat(),
+            'exit_time': exit_time.isoformat(),
+            'symbol': symbol,
+            'side': side,
+            'entry_price': entry_price,
+            'exit_price': exit_price,
+            'shares': shares,
+            'position_value': position_value,
+            'stop_loss': stop_loss,
+            'target_1': target_1,
+            'target_2': target_2,
+            'pnl_dollars': pnl_dollars,
+            'pnl_percent': pnl_percent,
+            'hold_minutes': hold_minutes,
+            'exit_reason': exit_reason,
+            'regime': regime,
+            'signal_strength': signal_strength,
+            'rsi': rsi,
+            'adx': adx,
+            'ma_spread': ma_spread,
+            'slippage': slippage
+        }
+        
+        df = pd.DataFrame([trade_data])
+        
+        if TRADES_PATH.exists():
+            existing = pd.read_csv(TRADES_PATH)
+            df = pd.concat([existing, df], ignore_index=True)
+            cutoff_date = datetime.now(EASTERN) - timedelta(days=90)
+            df['entry_time'] = pd.to_datetime(df['entry_time'])
+            df = df[df['entry_time'] > cutoff_date]
+        
+        df.to_csv(TRADES_PATH, index=False)
+        debug_print(f"Trade logged: {side} {symbol} P&L=${pnl_dollars:.2f} ({pnl_percent:.2f}%)")
+    except Exception as e:
+        debug_print(f"Failed to log trade: {e}")
+
+def log_missed_signal(timestamp, signal_type, reject_reason, price_at_signal, symbol, signal_strength, rsi, adx, regime):
+    try:
+        signal_data = {
+            'timestamp': timestamp.isoformat(),
+            'signal_type': signal_type,
+            'reject_reason': reject_reason,
+            'price_at_signal': price_at_signal,
+            'symbol': symbol,
+            'signal_strength': signal_strength,
+            'rsi': rsi,
+            'adx': adx,
+            'regime': regime
+        }
+        
+        df = pd.DataFrame([signal_data])
+        
+        if SIGNALS_PATH.exists():
+            existing = pd.read_csv(SIGNALS_PATH)
+            df = pd.concat([existing, df], ignore_index=True)
+            cutoff_date = datetime.now(EASTERN) - timedelta(days=30)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df[df['timestamp'] > cutoff_date]
+        
+        df.to_csv(SIGNALS_PATH, index=False)
+        debug_print(f"Missed signal logged: {signal_type} rejected due to {reject_reason}")
+    except Exception as e:
+        debug_print(f"Failed to log missed signal: {e}")
+
+def log_daily_performance(date, opening_equity, closing_equity, total_trades, winners, losers, total_pnl, max_drawdown, avg_regime, avg_vix):
+    try:
+        perf_data = {
+            'date': date.strftime('%Y-%m-%d'),
+            'opening_equity': opening_equity,
+            'closing_equity': closing_equity,
+            'total_trades': total_trades,
+            'winners': winners,
+            'losers': losers,
+            'win_rate': (winners / total_trades * 100) if total_trades > 0 else 0,
+            'total_pnl': total_pnl,
+            'pnl_percent': (total_pnl / opening_equity * 100) if opening_equity > 0 else 0,
+            'max_drawdown': max_drawdown,
+            'avg_regime': avg_regime,
+            'avg_vix': avg_vix
+        }
+        
+        df = pd.DataFrame([perf_data])
+        
+        if PERFORMANCE_PATH.exists():
+            existing = pd.read_csv(PERFORMANCE_PATH)
+            df = pd.concat([existing, df], ignore_index=True)
+            cutoff_date = datetime.now(EASTERN) - timedelta(days=180)
+            df['date'] = pd.to_datetime(df['date'])
+            df = df[df['date'] > cutoff_date]
+        
+        df.to_csv(PERFORMANCE_PATH, index=False)
+        debug_print(f"Daily performance logged: {total_trades} trades, P&L=${total_pnl:.2f}")
+    except Exception as e:
+        debug_print(f"Failed to log daily performance: {e}")
+
+def log_indicators(timestamp, symbol, price, volume, rsi_val, adx_val, atr_val, ma_spread, regime, position_status):
+    try:
+        indicator_data = {
+            'timestamp': timestamp.isoformat(),
+            'symbol': symbol,
+            'price': price,
+            'volume': volume,
+            'rsi': rsi_val,
+            'adx': adx_val,
+            'atr': atr_val,
+            'ma_spread': ma_spread,
+            'regime': regime,
+            'position_status': position_status
+        }
+        
+        df = pd.DataFrame([indicator_data])
+        
+        if INDICATORS_PATH.exists():
+            existing = pd.read_csv(INDICATORS_PATH)
+            df = pd.concat([existing, df], ignore_index=True)
+            cutoff_date = datetime.now(EASTERN) - timedelta(days=7)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df[df['timestamp'] > cutoff_date]
+        
+        df.to_csv(INDICATORS_PATH, index=False)
+    except Exception as e:
+        debug_print(f"Failed to log indicators: {e}")
 
 def debug_print(message):
     if DEBUG_MODE:
@@ -957,6 +1088,18 @@ def main():
                         debug_print(f"Restored opening equity: ${opening_equity:.2f}")
                     logger.info(f"📊  Session restored: {trades_today} trades today")
                 
+                entry_strength = 0
+                entry_rsi = 0
+                entry_adx = 0
+                entry_ma_spread = 0
+                entry_regime = 'unknown'
+                winners = 0
+                losers = 0
+                vix_readings = []
+                regime_readings = []
+                max_intraday_drawdown = 0
+                last_indicator_log = datetime.now(EASTERN)
+                
                 try:
                     existing_position = api.get_position(SYMBOL)
                     qty = float(existing_position.qty)
@@ -1061,10 +1204,51 @@ def main():
                         if atr_based_trailing_stop(SYMBOL, entry_price, current_price, stop_loss, position_type):
                             qty = current_position_qty(SYMBOL)
                             if qty != 0:
+                                exit_time = datetime.now(EASTERN)
+                                hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
+                                
                                 if position_type == 'long':
-                                    submit_market_sell(SYMBOL, qty)
+                                    exit_price = submit_market_sell(SYMBOL, qty)
+                                    pnl_dollars = (exit_price - entry_price) * qty if exit_price else 0
                                 else:
-                                    submit_buy_to_cover(SYMBOL, abs(qty))
+                                    exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
+                                    pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
+                                
+                                pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
+                                
+                                if pnl_dollars > 0:
+                                    winners += 1
+                                elif pnl_dollars < 0:
+                                    losers += 1
+                                
+                                risk_pct = abs((entry_price - stop_loss) / entry_price) if entry_price > 0 else 0
+                                target_1 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_1 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_1
+                                target_2 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_2 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_2
+                                
+                                log_trade(
+                                    entry_time,
+                                    exit_time,
+                                    SYMBOL,
+                                    position_type,
+                                    entry_price,
+                                    exit_price if exit_price else current_price,
+                                    abs(qty),
+                                    entry_price * abs(qty),
+                                    stop_loss,
+                                    target_1,
+                                    target_2,
+                                    pnl_dollars,
+                                    pnl_percent,
+                                    hold_minutes,
+                                    'stop_hit',
+                                    entry_regime,
+                                    entry_strength,
+                                    entry_rsi,
+                                    entry_adx,
+                                    entry_ma_spread,
+                                    0
+                                )
+                                
                                 position_active = False
                                 trade_count += 1
                                 logger.info("🛑  Stop hit")
@@ -1082,8 +1266,28 @@ def main():
                     
                     signal, strength, signal_stop_loss, signal_position_type = advanced_signal_generator(SYMBOL)
                     
+                    bars_for_signal = get_recent_bars(SYMBOL, 50)
+                    signal_rsi = 0
+                    signal_adx = 0
+                    signal_ma_spread = 0
+                    if bars_for_signal is not None and len(bars_for_signal) >= LONG_WINDOW:
+                        closes = bars_for_signal['close']
+                        highs = bars_for_signal['high']
+                        lows = bars_for_signal['low']
+                        signal_rsi = rsi(closes, 14).iloc[-1]
+                        signal_adx = adx(highs, lows, closes).iloc[-1]
+                        if USE_EMA:
+                            short_ma = ema(closes, SHORT_WINDOW).iloc[-1]
+                            long_ma = ema(closes, LONG_WINDOW).iloc[-1]
+                        else:
+                            short_ma = sma(closes, SHORT_WINDOW).iloc[-1]
+                            long_ma = sma(closes, LONG_WINDOW).iloc[-1]
+                        signal_ma_spread = short_ma - long_ma
+                    
                     if signal == 'sell' and not ENABLE_SHORT_SELLING:
                         debug_print("Short selling disabled, ignoring sell signal")
+                        if signal and strength > 0:
+                            log_missed_signal(datetime.now(EASTERN), signal, 'short_selling_disabled', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
                         signal = None
                         signal_position_type = None
                     
@@ -1125,6 +1329,12 @@ def main():
                                 position_active = True
                                 position_type = signal_position_type
                                 
+                                entry_strength = strength
+                                entry_rsi = signal_rsi
+                                entry_adx = signal_adx
+                                entry_ma_spread = signal_ma_spread
+                                entry_regime = regime
+                                
                                 if T1_SETTLEMENT_ENABLED and signal == 'buy':
                                     trade_amount = position_size
                                     settlement_tracker.add_trade(datetime.now(EASTERN), trade_amount)
@@ -1148,6 +1358,7 @@ def main():
                         else:
                             logger.warning(f"⚠️  Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
                             debug_print(f"Insufficient buying power: ${buying_power:.2f} < ${position_size:.2f}")
+                            log_missed_signal(datetime.now(EASTERN), signal, 'insufficient_buying_power', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
                             
                             if T1_SETTLEMENT_ENABLED:
                                 pending = settlement_tracker.get_pending_amount()
@@ -1179,6 +1390,30 @@ def main():
                     status_msg += f" | H:{hourly_trend} | VIX:{vix_level:.1f} | {trades_today}/{MAX_TRADES_PER_DAY}"
                     logger.info(status_msg)
                     
+                    vix_readings.append(vix_level)
+                    regime_readings.append(regime)
+                    
+                    current_drawdown = (opening_equity - current_equity) / opening_equity if opening_equity > 0 else 0
+                    if current_drawdown > max_intraday_drawdown:
+                        max_intraday_drawdown = current_drawdown
+                    
+                    now = datetime.now(EASTERN)
+                    if (now - last_indicator_log).total_seconds() >= 300:
+                        if bars_for_signal is not None and len(bars_for_signal) > 0:
+                            log_indicators(
+                                now,
+                                SYMBOL,
+                                current_price,
+                                bars_for_signal['volume'].iloc[-1] if 'volume' in bars_for_signal.columns else 0,
+                                signal_rsi,
+                                signal_adx,
+                                atr(bars_for_signal['high'], bars_for_signal['low'], bars_for_signal['close']).iloc[-1] if len(bars_for_signal) >= 14 else 0,
+                                signal_ma_spread,
+                                regime,
+                                position_status
+                            )
+                            last_indicator_log = now
+                    
                     save_session_state(
                         trades_today,
                         opening_equity,
@@ -1197,6 +1432,22 @@ def main():
                 final_equity = fetch_equity()
                 session_pnl = final_equity - opening_equity
                 session_pnl_pct = (session_pnl / opening_equity) * 100 if opening_equity > 0 else 0
+                
+                avg_vix = sum(vix_readings) / len(vix_readings) if vix_readings else 0
+                most_common_regime = max(set(regime_readings), key=regime_readings.count) if regime_readings else 'unknown'
+                
+                log_daily_performance(
+                    session_date,
+                    opening_equity,
+                    final_equity,
+                    trade_count,
+                    winners,
+                    losers,
+                    session_pnl,
+                    max_intraday_drawdown,
+                    most_common_regime,
+                    avg_vix
+                )
                 
                 logger.info(f"📊  Summary: {trade_count} trades")
                 logger.info(f"💰  Final: ${final_equity:.2f} (PNL: ${session_pnl:+.2f}, {session_pnl_pct:+.2f}%)")
