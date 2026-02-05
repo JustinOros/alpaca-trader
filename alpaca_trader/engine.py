@@ -338,11 +338,6 @@ class SignalState:
         self.last_bearish_crossover_bar = -999
 
 class PositionState:
-    """
-    Tracks position state for profit taking and stop management.
-    NOTE: This bot runs single-threaded - no locks needed.
-    If extending to multi-threaded, add threading.Lock() protection.
-    """
     def __init__(self):
         self.target_1_hit = False
         self.trailing_stop = None
@@ -674,7 +669,12 @@ def advanced_signal_generator(symbol):
         return None, 0, 0, None
     
     if not check_volume(bars, VOLUME_MULTIPLIER):
-        debug_print("Volume filter failed")
+        if len(bars) >= 20 and "volume" in bars.columns:
+            avg_vol = bars["volume"].rolling(window=20).mean().iloc[-1]
+            cur_vol = bars["volume"].iloc[-1]
+            debug_print(f"Volume filter failed: current={cur_vol:,.0f}, avg={avg_vol:,.0f}, required={avg_vol*VOLUME_MULTIPLIER:,.0f} ({VOLUME_MULTIPLIER}x)")
+        else:
+            debug_print("Volume filter failed: insufficient data")
         return None, 0, 0, None
     
     bullish_pattern, bearish_pattern = check_candle_pattern(bars)
