@@ -30,7 +30,7 @@ VOLATILITY_ANNUALIZATION_FACTOR = 252
 SCRIPT_DIR = Path(__file__).parent
 LOG_PATH = SCRIPT_DIR / "trading.log"
 DEBUG_LOG_PATH = SCRIPT_DIR / "debug.log"
-SESSION_STATE_PATH = SCRIPT_DIR / "session_state.csv"
+SESSION_STATE_PATH = SCRIPT_DIR / "session.csv"
 
 logging.basicConfig(
     level=logging.INFO,
