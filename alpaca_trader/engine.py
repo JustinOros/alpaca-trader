@@ -30,6 +30,7 @@ VOLATILITY_ANNUALIZATION_FACTOR = 252
 SCRIPT_DIR = Path(__file__).parent
 LOG_PATH = SCRIPT_DIR / "trading.log"
 DEBUG_LOG_PATH = SCRIPT_DIR / "debug.log"
+SESSION_STATE_PATH = SCRIPT_DIR / "session_state.csv"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -348,6 +349,71 @@ class PositionState:
 
 signal_state = SignalState()
 position_state = PositionState()
+
+def save_session_state(trades_today, opening_equity, last_bullish_crossover, last_bearish_crossover, session_date):
+    try:
+        state_data = {
+            'timestamp': datetime.now(EASTERN).isoformat(),
+            'session_date': session_date.strftime('%Y-%m-%d'),
+            'trades_today': trades_today,
+            'opening_equity': opening_equity,
+            'last_bullish_crossover_bar': last_bullish_crossover,
+            'last_bearish_crossover_bar': last_bearish_crossover
+        }
+        
+        df = pd.DataFrame([state_data])
+        
+        if SESSION_STATE_PATH.exists():
+            existing = pd.read_csv(SESSION_STATE_PATH)
+            df = pd.concat([existing, df], ignore_index=True)
+            df = df.tail(100)
+        
+        df.to_csv(SESSION_STATE_PATH, index=False)
+        debug_print(f"Session state saved: trades={trades_today}, equity=${opening_equity:.2f}")
+    except Exception as e:
+        debug_print(f"Failed to save session state: {e}")
+
+def load_session_state():
+    try:
+        if not SESSION_STATE_PATH.exists():
+            debug_print("No session state file found, starting fresh")
+            return None
+        
+        df = pd.read_csv(SESSION_STATE_PATH)
+        if len(df) == 0:
+            debug_print("Session state file empty, starting fresh")
+            return None
+        
+        last_state = df.iloc[-1]
+        last_timestamp = datetime.fromisoformat(last_state['timestamp'])
+        now = datetime.now(EASTERN)
+        
+        time_diff = (now - last_timestamp).total_seconds()
+        
+        if time_diff > 7200:
+            debug_print(f"Last session state too old ({time_diff/3600:.1f}h ago), starting fresh")
+            return None
+        
+        session_date = datetime.strptime(last_state['session_date'], '%Y-%m-%d').date()
+        if session_date != now.date():
+            debug_print(f"Last session was on different day ({session_date}), starting fresh")
+            return None
+        
+        state = {
+            'trades_today': int(last_state['trades_today']),
+            'opening_equity': float(last_state['opening_equity']),
+            'last_bullish_crossover_bar': int(last_state['last_bullish_crossover_bar']),
+            'last_bearish_crossover_bar': int(last_state['last_bearish_crossover_bar']),
+            'timestamp': last_timestamp
+        }
+        
+        debug_print(f"Loaded session state from {time_diff/60:.1f}m ago: trades={state['trades_today']}")
+        logger.info(f"🔄  Resumed session from {time_diff/60:.1f}m ago: {state['trades_today']} trades today")
+        return state
+        
+    except Exception as e:
+        debug_print(f"Failed to load session state: {e}")
+        return None
 
 def debug_print(message):
     if DEBUG_MODE:
@@ -858,13 +924,15 @@ def main():
                 logger.info("🔔  Market open - session starting")
                 debug_print("Market open, starting trading session")
                 
+                current_date = datetime.now(EASTERN)
+                session_date = current_date.date()
+                
                 opening_equity = fetch_equity()
                 logger.info(f"💵  Starting equity: ${opening_equity:.2f}")
                 
                 settlement_tracker = SettlementTracker()
                 
                 if T1_SETTLEMENT_ENABLED:
-                    current_date = datetime.now(EASTERN)
                     settlement_tracker.settle_funds(current_date)
                 
                 position_active = False
@@ -878,6 +946,16 @@ def main():
                 
                 signal_state.reset()
                 position_state.reset()
+                
+                restored_state = load_session_state()
+                if restored_state:
+                    trades_today = restored_state['trades_today']
+                    signal_state.last_bullish_crossover_bar = restored_state['last_bullish_crossover_bar']
+                    signal_state.last_bearish_crossover_bar = restored_state['last_bearish_crossover_bar']
+                    if abs(restored_state['opening_equity'] - opening_equity) < opening_equity * 0.05:
+                        opening_equity = restored_state['opening_equity']
+                        debug_print(f"Restored opening equity: ${opening_equity:.2f}")
+                    logger.info(f"📊  Session restored: {trades_today} trades today")
                 
                 try:
                     existing_position = api.get_position(SYMBOL)
@@ -1100,6 +1178,14 @@ def main():
                     
                     status_msg += f" | H:{hourly_trend} | VIX:{vix_level:.1f} | {trades_today}/{MAX_TRADES_PER_DAY}"
                     logger.info(status_msg)
+                    
+                    save_session_state(
+                        trades_today,
+                        opening_equity,
+                        signal_state.last_bullish_crossover_bar,
+                        signal_state.last_bearish_crossover_bar,
+                        session_date
+                    )
                     
                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)}...")
                     time.sleep(POLL_INTERVAL)
