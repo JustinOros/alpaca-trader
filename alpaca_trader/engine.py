@@ -1235,6 +1235,7 @@ def main():
                                     time.sleep(POLL_INTERVAL)
                                     continue
                         
+                        qty_before_scale = current_position_qty(SYMBOL)
                         target_hit, exit_price_target = scale_out_profit_taking(SYMBOL, entry_price, current_price, stop_loss, position_type)
                         if target_hit:
                             remaining_qty = current_position_qty(SYMBOL)
@@ -1243,11 +1244,11 @@ def main():
                                 hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
                                 
                                 if position_type == 'long':
-                                    pnl_dollars = (exit_price_target - entry_price) * abs(qty) if exit_price_target and qty != 0 else 0
+                                    pnl_dollars = (exit_price_target - entry_price) * abs(qty_before_scale) if exit_price_target and qty_before_scale != 0 else 0
                                 else:
-                                    pnl_dollars = (entry_price - exit_price_target) * abs(qty) if exit_price_target and qty != 0 else 0
+                                    pnl_dollars = (entry_price - exit_price_target) * abs(qty_before_scale) if exit_price_target and qty_before_scale != 0 else 0
                                 
-                                pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
+                                pnl_percent = (pnl_dollars / (entry_price * abs(qty_before_scale)) * 100) if entry_price > 0 and qty_before_scale != 0 else 0
                                 
                                 if pnl_dollars > 0:
                                     winners += 1
@@ -1258,12 +1259,6 @@ def main():
                                 target_1 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_1 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_1
                                 target_2 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_2 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_2
                                 
-                                try:
-                                    existing_position = api.get_position(SYMBOL)
-                                    original_qty = float(existing_position.qty)
-                                except:
-                                    original_qty = qty
-                                
                                 log_trade(
                                     entry_time,
                                     exit_time,
@@ -1271,8 +1266,8 @@ def main():
                                     position_type,
                                     entry_price,
                                     exit_price_target if exit_price_target else current_price,
-                                    abs(original_qty),
-                                    entry_price * abs(original_qty),
+                                    abs(qty_before_scale),
+                                    entry_price * abs(qty_before_scale),
                                     stop_loss,
                                     target_1,
                                     target_2,
