@@ -969,10 +969,11 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
             half_qty = int(qty / 2)
             if half_qty > 0:
                 debug_print(f"Target 1 hit ({target_1_pct:.2f}%), scaling out {half_qty} shares")
+                exit_price = None
                 if position_type == 'long':
-                    submit_market_sell(symbol, half_qty)
+                    exit_price = submit_market_sell(symbol, half_qty)
                 else:
-                    submit_buy_to_cover(symbol, half_qty)
+                    exit_price = submit_buy_to_cover(symbol, half_qty)
                 position_state.target_1_hit = True
                 logger.info(f"💰  Partial profit @ {profit_pct:.2f}% ({half_qty} shares)")
                 debug_print(f"Partial profit taken: {half_qty} shares @ {profit_pct:.2f}%")
@@ -985,15 +986,16 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
         qty = current_position_qty(symbol)
         if qty != 0:
             debug_print(f"Target 2 hit ({target_2_pct:.2f}%), closing remaining {qty} shares")
+            exit_price = None
             if position_type == 'long':
-                submit_market_sell(symbol, qty)
+                exit_price = submit_market_sell(symbol, qty)
             else:
-                submit_buy_to_cover(symbol, qty)
+                exit_price = submit_buy_to_cover(symbol, qty)
             logger.info(f"💰💰  Full profit @ {profit_pct:.2f}%")
             debug_print(f"Full profit target hit: closed @ {profit_pct:.2f}%")
-            return True
+            return True, exit_price if exit_price else current_price
     
-    return False
+    return False, None
 
 def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, position_type):
     debug_print(f"Checking trailing stop: entry=${entry_price:.2f}, current=${current_price:.2f}")
@@ -1181,10 +1183,51 @@ def main():
                                 debug_print(f"Max hold time exceeded, closing position")
                                 qty = current_position_qty(SYMBOL)
                                 if qty != 0:
+                                    exit_time = datetime.now(EASTERN)
+                                    hold_minutes = time_in_trade / 60
+                                    
                                     if position_type == 'long':
-                                        submit_market_sell(SYMBOL, qty)
+                                        exit_price = submit_market_sell(SYMBOL, qty)
+                                        pnl_dollars = (exit_price - entry_price) * qty if exit_price else 0
                                     else:
-                                        submit_buy_to_cover(SYMBOL, abs(qty))
+                                        exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
+                                        pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
+                                    
+                                    pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
+                                    
+                                    if pnl_dollars > 0:
+                                        winners += 1
+                                    elif pnl_dollars < 0:
+                                        losers += 1
+                                    
+                                    risk_pct = abs((entry_price - stop_loss) / entry_price) if entry_price > 0 else 0
+                                    target_1 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_1 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_1
+                                    target_2 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_2 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_2
+                                    
+                                    log_trade(
+                                        entry_time,
+                                        exit_time,
+                                        SYMBOL,
+                                        position_type,
+                                        entry_price,
+                                        exit_price if exit_price else current_price,
+                                        abs(qty),
+                                        entry_price * abs(qty),
+                                        stop_loss,
+                                        target_1,
+                                        target_2,
+                                        pnl_dollars,
+                                        pnl_percent,
+                                        hold_minutes,
+                                        'max_hold_time',
+                                        entry_regime,
+                                        entry_strength,
+                                        entry_rsi,
+                                        entry_adx,
+                                        entry_ma_spread,
+                                        0
+                                    )
+                                    
                                     position_active = False
                                     trade_count += 1
                                     position_state.reset()
@@ -1192,9 +1235,59 @@ def main():
                                     time.sleep(POLL_INTERVAL)
                                     continue
                         
-                        if scale_out_profit_taking(SYMBOL, entry_price, current_price, stop_loss, position_type):
+                        target_hit, exit_price_target = scale_out_profit_taking(SYMBOL, entry_price, current_price, stop_loss, position_type)
+                        if target_hit:
                             remaining_qty = current_position_qty(SYMBOL)
                             if remaining_qty == 0:
+                                exit_time = datetime.now(EASTERN)
+                                hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
+                                
+                                if position_type == 'long':
+                                    pnl_dollars = (exit_price_target - entry_price) * abs(qty) if exit_price_target and qty != 0 else 0
+                                else:
+                                    pnl_dollars = (entry_price - exit_price_target) * abs(qty) if exit_price_target and qty != 0 else 0
+                                
+                                pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
+                                
+                                if pnl_dollars > 0:
+                                    winners += 1
+                                elif pnl_dollars < 0:
+                                    losers += 1
+                                
+                                risk_pct = abs((entry_price - stop_loss) / entry_price) if entry_price > 0 else 0
+                                target_1 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_1 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_1
+                                target_2 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_2 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_2
+                                
+                                try:
+                                    existing_position = api.get_position(SYMBOL)
+                                    original_qty = float(existing_position.qty)
+                                except:
+                                    original_qty = qty
+                                
+                                log_trade(
+                                    entry_time,
+                                    exit_time,
+                                    SYMBOL,
+                                    position_type,
+                                    entry_price,
+                                    exit_price_target if exit_price_target else current_price,
+                                    abs(original_qty),
+                                    entry_price * abs(original_qty),
+                                    stop_loss,
+                                    target_1,
+                                    target_2,
+                                    pnl_dollars,
+                                    pnl_percent,
+                                    hold_minutes,
+                                    'target_2_hit',
+                                    entry_regime,
+                                    entry_strength,
+                                    entry_rsi,
+                                    entry_adx,
+                                    entry_ma_spread,
+                                    0
+                                )
+                                
                                 position_active = False
                                 position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
@@ -1258,12 +1351,6 @@ def main():
                                 time.sleep(POLL_INTERVAL)
                                 continue
                     
-                    if trades_today >= MAX_TRADES_PER_DAY:
-                        logger.info(f"📊  Daily limit ({MAX_TRADES_PER_DAY}) - monitoring only")
-                        debug_print(f"Daily trade limit reached ({trades_today}/{MAX_TRADES_PER_DAY})")
-                        time.sleep(POLL_INTERVAL)
-                        continue
-                    
                     signal, strength, signal_stop_loss, signal_position_type = advanced_signal_generator(SYMBOL)
                     
                     bars_for_signal = get_recent_bars(SYMBOL, 50)
@@ -1283,6 +1370,14 @@ def main():
                             short_ma = sma(closes, SHORT_WINDOW).iloc[-1]
                             long_ma = sma(closes, LONG_WINDOW).iloc[-1]
                         signal_ma_spread = short_ma - long_ma
+                    
+                    if trades_today >= MAX_TRADES_PER_DAY:
+                        if signal in ['buy', 'sell'] and strength > 0:
+                            log_missed_signal(datetime.now(EASTERN), signal, 'max_trades_per_day', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
+                        logger.info(f"📊  Daily limit ({MAX_TRADES_PER_DAY}) - monitoring only")
+                        debug_print(f"Daily trade limit reached ({trades_today}/{MAX_TRADES_PER_DAY})")
+                        time.sleep(POLL_INTERVAL)
+                        continue
                     
                     if signal == 'sell' and not ENABLE_SHORT_SELLING:
                         debug_print("Short selling disabled, ignoring sell signal")
@@ -1427,6 +1522,56 @@ def main():
                 
                 logger.info("🔚  Session ending...")
                 debug_print("Session ending, closing all positions...")
+                
+                if position_active and entry_time:
+                    exit_time = datetime.now(EASTERN)
+                    hold_minutes = (exit_time - entry_time).total_seconds() / 60
+                    qty = current_position_qty(SYMBOL)
+                    
+                    if qty != 0:
+                        bars_eod = get_recent_bars(SYMBOL, 10)
+                        exit_price = bars_eod['close'].iloc[-1] if bars_eod is not None and len(bars_eod) > 0 else current_price
+                        
+                        if position_type == 'long':
+                            pnl_dollars = (exit_price - entry_price) * qty
+                        else:
+                            pnl_dollars = (entry_price - exit_price) * abs(qty)
+                        
+                        pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
+                        
+                        if pnl_dollars > 0:
+                            winners += 1
+                        elif pnl_dollars < 0:
+                            losers += 1
+                        
+                        risk_pct = abs((entry_price - stop_loss) / entry_price) if entry_price > 0 else 0
+                        target_1 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_1 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_1
+                        target_2 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_2 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_2
+                        
+                        log_trade(
+                            entry_time,
+                            exit_time,
+                            SYMBOL,
+                            position_type,
+                            entry_price,
+                            exit_price,
+                            abs(qty),
+                            entry_price * abs(qty),
+                            stop_loss,
+                            target_1,
+                            target_2,
+                            pnl_dollars,
+                            pnl_percent,
+                            hold_minutes,
+                            'eod_close',
+                            entry_regime,
+                            entry_strength,
+                            entry_rsi,
+                            entry_adx,
+                            entry_ma_spread,
+                            0
+                        )
+                
                 close_all_positions()
                 
                 final_equity = fetch_equity()
