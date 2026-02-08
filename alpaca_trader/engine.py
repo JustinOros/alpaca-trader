@@ -110,7 +110,15 @@ DEFAULT_CONFIG = {
     "CROSSOVER_LOOKBACK": 3,
     "REQUIRE_CASH_ACCOUNT": False,
     "T1_SETTLEMENT_ENABLED": False,
-    "CASH_RESERVE_PCT": 0.0
+    "CASH_RESERVE_PCT": 0.0,
+    "STRATEGY_MODE": "ma_crossover",
+    "OR_FVG_ENABLED": False,
+    "OR_FVG_OPENING_RANGE_MINUTES": 15,
+    "OR_FVG_ENTRY_TIMEFRAME": "3Min",
+    "OR_FVG_MIN_GAP_SIZE": 0.05,
+    "OR_FVG_RISK_REWARD_RATIO": 2.0,
+    "OR_FVG_MAX_ENTRY_TIME": "10:30",
+    "OR_FVG_REQUIRE_VOLUME_CONFIRM": True
 }
 
 if not ENV_PATH.exists():
@@ -154,6 +162,15 @@ BAR_TIMEFRAME = config.get("BAR_TIMEFRAME", "5Min")
 RISK_PER_TRADE = float(config["RISK_PER_TRADE"])
 SHORT_WINDOW = int(config["SHORT_WINDOW"])
 LONG_WINDOW = int(config["LONG_WINDOW"])
+
+STRATEGY_MODE = config.get("STRATEGY_MODE", "ma_crossover")
+OR_FVG_ENABLED = bool(config.get("OR_FVG_ENABLED", False))
+OR_FVG_OPENING_RANGE_MINUTES = int(config.get("OR_FVG_OPENING_RANGE_MINUTES", 15))
+OR_FVG_ENTRY_TIMEFRAME = config.get("OR_FVG_ENTRY_TIMEFRAME", "3Min")
+OR_FVG_MIN_GAP_SIZE = float(config.get("OR_FVG_MIN_GAP_SIZE", 0.05))
+OR_FVG_RISK_REWARD_RATIO = float(config.get("OR_FVG_RISK_REWARD_RATIO", 2.0))
+OR_FVG_MAX_ENTRY_TIME = config.get("OR_FVG_MAX_ENTRY_TIME", "10:30")
+OR_FVG_REQUIRE_VOLUME_CONFIRM = bool(config.get("OR_FVG_REQUIRE_VOLUME_CONFIRM", True))
 
 if SHORT_WINDOW >= LONG_WINDOW:
     logger.error(f"⚠️  Configuration error: SHORT_WINDOW ({SHORT_WINDOW}) must be less than LONG_WINDOW ({LONG_WINDOW})")
@@ -791,6 +808,189 @@ def calculate_position_size(equity, stop_loss, current_price):
     if position_value > max_position:
         position_value = max_position
         debug_print(f"Position capped at 25% equity: ${position_value:.2f}")
+
+class ORFVGState:
+    def __init__(self):
+        self.opening_range_high = None
+        self.opening_range_low = None
+        self.opening_range_set = False
+        self.fvg_detected = False
+        self.fvg_direction = None
+        self.fvg_candle_index = None
+        self.entry_triggered = False
+        
+    def reset(self):
+        self.opening_range_high = None
+        self.opening_range_low = None
+        self.opening_range_set = False
+        self.fvg_detected = False
+        self.fvg_direction = None
+        self.fvg_candle_index = None
+        self.entry_triggered = False
+
+or_fvg_state = ORFVGState()
+
+def detect_fair_value_gap(bars, min_gap_pct=0.05):
+    if bars is None or len(bars) < 3:
+        return None, None
+    
+    for i in range(len(bars) - 3, max(len(bars) - 10, 0) - 1, -1):
+        if i < 0 or i + 2 >= len(bars):
+            continue
+            
+        candle_1_high = bars['high'].iloc[i]
+        candle_1_low = bars['low'].iloc[i]
+        candle_2_high = bars['high'].iloc[i + 1]
+        candle_2_low = bars['low'].iloc[i + 1]
+        candle_3_high = bars['high'].iloc[i + 2]
+        candle_3_low = bars['low'].iloc[i + 2]
+        
+        bullish_gap = candle_3_low > candle_1_high
+        if bullish_gap:
+            gap_size = candle_3_low - candle_1_high
+            if candle_2_high > 0:
+                gap_pct = (gap_size / candle_2_high) * 100
+                if gap_pct >= min_gap_pct:
+                    debug_print(f"Bullish FVG detected: gap={gap_size:.2f} ({gap_pct:.2f}%)")
+                    return "bullish", i + 2
+        
+        bearish_gap = candle_3_high < candle_1_low
+        if bearish_gap:
+            gap_size = candle_1_low - candle_3_high
+            if candle_2_low > 0:
+                gap_pct = (gap_size / candle_2_low) * 100
+                if gap_pct >= min_gap_pct:
+                    debug_print(f"Bearish FVG detected: gap={gap_size:.2f} ({gap_pct:.2f}%)")
+                    return "bearish", i + 2
+    
+    return None, None
+
+def or_fvg_signal_generator(symbol):
+    debug_print("Checking OR-FVG strategy")
+    
+    now = datetime.now(EASTERN)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    opening_range_end = market_open + timedelta(minutes=OR_FVG_OPENING_RANGE_MINUTES)
+    
+    max_entry_time_parts = OR_FVG_MAX_ENTRY_TIME.split(":")
+    max_entry_time = now.replace(
+        hour=int(max_entry_time_parts[0]), 
+        minute=int(max_entry_time_parts[1]), 
+        second=0, 
+        microsecond=0
+    )
+    
+    if now > max_entry_time:
+        debug_print(f"Past max entry time ({OR_FVG_MAX_ENTRY_TIME})")
+        return None, 0, 0, None
+    
+    if not or_fvg_state.opening_range_set and now >= opening_range_end:
+        start_time = market_open
+        end_time = opening_range_end
+        
+        bars_or = api.get_bars(
+            symbol, 
+            "1Min",
+            start=start_time.isoformat(),
+            end=end_time.isoformat(),
+            limit=OR_FVG_OPENING_RANGE_MINUTES
+        )
+        
+        if bars_or is not None and len(bars_or) > 0:
+            or_fvg_state.opening_range_high = bars_or['high'].max()
+            or_fvg_state.opening_range_low = bars_or['low'].min()
+            
+            if (pd.isna(or_fvg_state.opening_range_high) or 
+                pd.isna(or_fvg_state.opening_range_low) or
+                or_fvg_state.opening_range_high <= 0 or
+                or_fvg_state.opening_range_low <= 0 or
+                or_fvg_state.opening_range_low >= or_fvg_state.opening_range_high):
+                logger.error(f"❌  Invalid opening range: High={or_fvg_state.opening_range_high}, Low={or_fvg_state.opening_range_low}")
+                debug_print("Invalid opening range values detected")
+                return None, 0, 0, None
+            
+            or_fvg_state.opening_range_set = True
+            logger.info(f"📊  Opening Range set: High=${or_fvg_state.opening_range_high:.2f}, Low=${or_fvg_state.opening_range_low:.2f}")
+            debug_print(f"OR set: H={or_fvg_state.opening_range_high:.2f}, L={or_fvg_state.opening_range_low:.2f}")
+    
+    if not or_fvg_state.opening_range_set:
+        debug_print("Opening range not yet set")
+        return None, 0, 0, None
+    
+    bars_1min = api.get_bars(symbol, OR_FVG_ENTRY_TIMEFRAME, limit=50)
+    if bars_1min is None or len(bars_1min) == 0:
+        debug_print("No 1-min bars available")
+        return None, 0, 0, None
+    
+    bars_df = bars_1min.reset_index()
+    
+    bars_after_or = bars_df[bars_df['timestamp'] >= opening_range_end]
+    if len(bars_after_or) < 3:
+        debug_print("Not enough bars after opening range")
+        return None, 0, 0, None
+    
+    current_price = bars_after_or['close'].iloc[-1]
+    
+    if not or_fvg_state.fvg_detected:
+        fvg_direction, fvg_index = detect_fair_value_gap(bars_after_or, OR_FVG_MIN_GAP_SIZE)
+        
+        if fvg_direction:
+            or_fvg_state.fvg_detected = True
+            or_fvg_state.fvg_direction = fvg_direction
+            or_fvg_state.fvg_candle_index = fvg_index
+            logger.info(f"🎯  FVG detected: {fvg_direction.upper()}")
+            debug_print(f"FVG set: direction={fvg_direction}")
+    
+    if not or_fvg_state.fvg_detected:
+        debug_print("No FVG detected yet")
+        return None, 0, 0, None
+    
+    if or_fvg_state.entry_triggered:
+        debug_print("Entry already triggered today")
+        return None, 0, 0, None
+    
+    breakout_detected = False
+    position_type = None
+    
+    if or_fvg_state.fvg_direction == "bullish":
+        if current_price > or_fvg_state.opening_range_high:
+            breakout_detected = True
+            position_type = "long"
+            debug_print(f"Bullish breakout: ${current_price:.2f} > ${or_fvg_state.opening_range_high:.2f}")
+    elif or_fvg_state.fvg_direction == "bearish":
+        if current_price < or_fvg_state.opening_range_low:
+            breakout_detected = True
+            position_type = "short"
+            debug_print(f"Bearish breakout: ${current_price:.2f} < ${or_fvg_state.opening_range_low:.2f}")
+    
+    if not breakout_detected:
+        debug_print("No breakout detected")
+        return None, 0, 0, None
+    
+    if OR_FVG_REQUIRE_VOLUME_CONFIRM:
+        if len(bars_after_or) >= 20:
+            avg_volume = bars_after_or['volume'].rolling(window=20).mean().iloc[-1]
+            current_volume = bars_after_or['volume'].iloc[-1]
+            if current_volume < avg_volume * 1.2:
+                debug_print(f"Volume confirmation failed: {current_volume:.0f} < {avg_volume*1.2:.0f}")
+                return None, 0, 0, None
+        else:
+            debug_print(f"Volume confirmation skipped: only {len(bars_after_or)} bars available (need 20)")
+    
+    if position_type == "long":
+        stop_loss = or_fvg_state.opening_range_low
+        signal = "buy"
+    else:
+        stop_loss = or_fvg_state.opening_range_high
+        signal = "sell"
+    
+    strength = 1.0
+    
+    logger.info(f"✅  OR-FVG Entry: {signal.upper()} @ ${current_price:.2f}, Stop=${stop_loss:.2f}")
+    debug_print(f"OR-FVG signal generated: {signal}, stop={stop_loss:.2f}")
+    
+    return signal, strength, stop_loss, position_type
+
     if position_value < MIN_NOTIONAL:
         position_value = MIN_NOTIONAL
         debug_print(f"Position set to minimum: ${position_value:.2f}")
@@ -960,6 +1160,23 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
     
     risk_pct = abs((entry_price - stop_loss) / entry_price) * 100
     
+    if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
+        target_pct = risk_pct * OR_FVG_RISK_REWARD_RATIO
+        
+        if profit_pct >= target_pct:
+            qty = current_position_qty(symbol)
+            if qty != 0:
+                debug_print(f"OR-FVG target hit ({target_pct:.2f}%), closing {qty} shares")
+                exit_price = None
+                if position_type == 'long':
+                    exit_price = submit_market_sell(symbol, qty)
+                else:
+                    exit_price = submit_buy_to_cover(symbol, qty)
+                logger.info(f"💰  OR-FVG Target @ {profit_pct:.2f}%")
+                debug_print(f"OR-FVG profit target hit: closed @ {profit_pct:.2f}%")
+                return True, exit_price if exit_price else current_price
+        return False, None
+    
     target_1_pct = risk_pct * PROFIT_TARGET_1
     target_2_pct = risk_pct * PROFIT_TARGET_2
     
@@ -1079,6 +1296,7 @@ def main():
                 
                 signal_state.reset()
                 position_state.reset()
+                or_fvg_state.reset()
                 
                 restored_state = load_session_state()
                 if restored_state:
@@ -1289,7 +1507,72 @@ def main():
                                 time.sleep(POLL_INTERVAL)
                                 continue
                         
-                        if atr_based_trailing_stop(SYMBOL, entry_price, current_price, stop_loss, position_type):
+                        if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
+                            stop_hit = False
+                            if position_type == 'long' and current_price <= stop_loss:
+                                stop_hit = True
+                                debug_print(f"OR-FVG long stop hit: ${current_price:.2f} <= ${stop_loss:.2f}")
+                            elif position_type == 'short' and current_price >= stop_loss:
+                                stop_hit = True
+                                debug_print(f"OR-FVG short stop hit: ${current_price:.2f} >= ${stop_loss:.2f}")
+                            
+                            if stop_hit:
+                                qty = current_position_qty(SYMBOL)
+                                if qty != 0:
+                                    exit_time = datetime.now(EASTERN)
+                                    hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
+                                    
+                                    if position_type == 'long':
+                                        exit_price = submit_market_sell(SYMBOL, qty)
+                                        pnl_dollars = (exit_price - entry_price) * qty if exit_price else 0
+                                    else:
+                                        exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
+                                        pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
+                                    
+                                    pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
+                                    
+                                    if pnl_dollars > 0:
+                                        winners += 1
+                                    elif pnl_dollars < 0:
+                                        losers += 1
+                                    
+                                    risk_pct = abs((entry_price - stop_loss) / entry_price) if entry_price > 0 else 0
+                                    target_1 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_1 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_1
+                                    target_2 = entry_price + (entry_price - stop_loss) * PROFIT_TARGET_2 if position_type == 'long' else entry_price - (stop_loss - entry_price) * PROFIT_TARGET_2
+                                    
+                                    log_trade(
+                                        entry_time,
+                                        exit_time,
+                                        SYMBOL,
+                                        position_type,
+                                        entry_price,
+                                        exit_price if exit_price else current_price,
+                                        abs(qty),
+                                        entry_price * abs(qty),
+                                        stop_loss,
+                                        target_1,
+                                        target_2,
+                                        pnl_dollars,
+                                        pnl_percent,
+                                        hold_minutes,
+                                        'stop_hit',
+                                        entry_regime,
+                                        entry_strength,
+                                        entry_rsi,
+                                        entry_adx,
+                                        entry_ma_spread,
+                                        0
+                                    )
+                                    
+                                    position_active = False
+                                    trade_count += 1
+                                    logger.info("🛑  Stop hit")
+                                    debug_print("Stop hit, position closed")
+                                    position_state.reset()
+                                    debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
+                                    time.sleep(POLL_INTERVAL)
+                                    continue
+                        elif atr_based_trailing_stop(SYMBOL, entry_price, current_price, stop_loss, position_type):
                             qty = current_position_qty(SYMBOL)
                             if qty != 0:
                                 exit_time = datetime.now(EASTERN)
@@ -1346,7 +1629,10 @@ def main():
                                 time.sleep(POLL_INTERVAL)
                                 continue
                     
-                    signal, strength, signal_stop_loss, signal_position_type = advanced_signal_generator(SYMBOL)
+                    if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
+                        signal, strength, signal_stop_loss, signal_position_type = or_fvg_signal_generator(SYMBOL)
+                    else:
+                        signal, strength, signal_stop_loss, signal_position_type = advanced_signal_generator(SYMBOL)
                     
                     bars_for_signal = get_recent_bars(SYMBOL, 50)
                     signal_rsi = 0
@@ -1437,6 +1723,10 @@ def main():
                                 logger.info(f"    Entry=${entry_price:.2f}, Stop=${stop_loss:.2f}, Risk={risk_amount:.2%}")
                                 logger.info(f"    Regime={regime}, Strength={strength:.2f}, Trade {trade_count} ({trades_today}/{MAX_TRADES_PER_DAY})")
                                 debug_print(f"Trade executed: entry=${entry_price:.2f}, stop=${stop_loss:.2f}, regime={regime}")
+                                
+                                if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
+                                    or_fvg_state.entry_triggered = True
+                                    debug_print("OR-FVG entry_triggered flag set")
                                 
                                 position_state.trailing_stop = stop_loss
                                 debug_print(f"Trailing stop initialized: ${stop_loss:.2f}")

@@ -1,149 +1,265 @@
 # Alpaca Trader
 
-Automated day trading bot for Alpaca Markets using technical indicators and risk management.
+Advanced algorithmic trading bot built for Alpaca Markets.
 
-## Features
+Designed for automated strategy execution, multi-layer technical analysis, and research-driven trading experimentation.
 
-- Multiple technical indicators (SMA/EMA, RSI, ADX, ATR, MACD, Bollinger Bands)
-- Advanced risk management with trailing stops and profit targets
-- Market regime detection (trend/range/high vol/low vol)
-- Multi-timeframe confluence analysis
-- Position sizing based on account equity and risk per trade
-- Support for both long and short positions
-- Configurable via JSON config file
-- Comprehensive debug logging
+Supports configurable strategies, risk management automation, and detailed performance logging.
 
-## Requirements
+---
 
-- Python 3.8+
-- Alpaca Markets account (paper or live)
+## 🚀 Quick Start
 
-## Installation
+Clone and install:
 
 ```bash
+git clone https://github.com/YOUR_REPO/alpaca-trader.git
+cd alpaca-trader
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-1. Create `.env` file in `alpaca_trader/` directory:
-```
-APCA_API_KEY_ID="your_api_key"
-APCA_API_SECRET_KEY="your_secret_key"
-APCA_API_BASE_URL="https://paper-api.alpaca.markets"
-```
-
-2. Modify `config.json` to adjust trading parameters:
-- `SYMBOL`: Stock to trade (default: SPY)
-- `RISK_PER_TRADE`: Risk per trade as % of equity (default: 0.01)
-- `MAX_TRADES_PER_DAY`: Daily trade limit (default: 5)
-- `ENABLE_SHORT_SELLING`: Enable/disable short positions (default: true)
-- `MIN_SIGNAL_STRENGTH`: Minimum signal strength to enter trades (default: 0.3)
-
-## Usage
+Run:
 
 ```bash
 python3 run.py
 ```
 
-Or:
+On first launch, the bot will create:
 
-```bash
-python3 -m alpaca_trader
+```
+alpaca_trader/.env
 ```
 
-## Key Parameters
+Add your Alpaca API keys:
 
-### General Settings
-- **DEBUG_MODE**: Enable detailed debug logging (default: true)
-- **BAR_TIMEFRAME**: Candlestick timeframe for analysis (default: "5Min")
-- **POLL_INTERVAL**: Seconds between market checks (default: 60)
-- **MIN_NOTIONAL**: Minimum position size in dollars (default: 1.0)
-- **PDT_RULE**: Enforce pattern day trader rules (default: true)
+```
+APCA_API_KEY_ID="your_key"
+APCA_API_SECRET_KEY="your_secret"
+APCA_API_BASE_URL="https://paper-api.alpaca.markets"
+```
 
-### Entry/Exit Signals
-- **SHORT_WINDOW**: Fast moving average period (default: 10)
-- **LONG_WINDOW**: Slow moving average period (default: 30)
-- **USE_EMA**: Use EMA instead of SMA (default: true)
-- **REQUIRE_MA_CROSSOVER**: Require recent MA crossover for signals (default: true)
-- **CROSSOVER_LOOKBACK**: Bars to look back for crossovers (default: 5)
-- **RSI_BUY_MAX**: Maximum RSI for buy signals in trend (default: 55)
-- **RSI_SELL_MIN**: Minimum RSI for sell signals in trend (default: 45)
-- **RSI_SELL_MAX**: Maximum RSI for sell signals in trend (default: 70)
-- **RSI_RANGE_OVERSOLD**: RSI threshold for range-bound buy (default: 30)
-- **RSI_RANGE_OVERBOUGHT**: RSI threshold for range-bound sell (default: 70)
-- **ADX_THRESHOLD**: Minimum ADX for trend detection (default: 25)
-- **MIN_SIGNAL_STRENGTH**: Minimum signal strength threshold (default: 0.3)
+---
 
-### Risk Management
-- **ATR_STOP_MULTIPLIER**: Stop loss distance in ATR units (default: 2.0)
-- **USE_TRAILING_STOP**: Enable trailing stop loss (default: true)
-- **PROFIT_TARGET_1**: First profit target in R (default: 2.0)
-- **PROFIT_TARGET_2**: Second profit target in R (default: 4.0)
-- **MAX_DRAWDOWN**: Maximum account drawdown threshold (default: 0.08)
-- **MAX_HOLD_TIME**: Maximum position hold time in seconds (default: 3600)
-- **MIN_RISK_REWARD**: Minimum risk/reward ratio required (default: 2.0)
-- **VOLATILITY_ADJUSTMENT**: Adjust position size based on volatility (default: true)
+## 🎯 Features
+
+### Core Trading Engine
+
+- Automated signal evaluation loop
+- Multi-strategy architecture
+- Risk-aware position sizing
+- Market regime detection
+- Config-driven behavior (no code changes required)
 
 ### Technical Indicators
-- **BB_WINDOW**: Bollinger Bands period (default: 20)
-- **BB_STD**: Bollinger Bands standard deviation (default: 2.0)
-- **REQUIRE_CANDLE_PATTERN**: Require bullish/bearish candle patterns (default: false)
-- **REQUIRE_MACD_CONFIRMATION**: Require MACD crossover confirmation (default: false)
+
+- SMA / EMA
+- RSI
+- MACD
+- ADX
+- ATR
+- Bollinger Bands
+- Multi-timeframe signal confirmation
+
+### Strategy System
+
+Supports multiple strategy modes:
+
+- Moving Average crossover (default)
+- Opening Range + Fair Value Gap (OR/FVG)
+- Regime-filtered execution
+
+### Risk Management
+
+- ATR-based stop loss
+- Trailing stop logic
+- Multi-level take profits
+- Risk-per-trade sizing
+- Max drawdown protection
+- Risk/reward validation
+- Position hold-time limits
+
+### Execution Controls
+
+- Market or limit orders
+- Slippage simulation
+- Commission modeling
+- Cash account compatibility
+- T+1 settlement handling
+- PDT rule awareness
+
+### Market Filters
+
+- Market regime classification
+- Volume filters
+- 200 SMA trend filter
+- VIX volatility filter
+- Candle confirmation
+- MACD confirmation layer
+
+### Analytics & Logging
+
+Automatically generates:
+
+```
+logs/
+├── trading.log
+├── debug.log
+
+data/
+├── trades.csv
+├── signals.csv
+├── performance.csv
+├── indicators.csv
+├── session.csv
+```
+
+---
+
+## 🧠 Strategy Overview
+
+### Moving Average Strategy
+
+Primary signal generated when:
+
+- Short MA crosses long MA
+- Trend filters confirm
+- Risk/reward meets threshold
+- Market regime supports trade
+
+Optional confirmation:
+
+- MACD alignment
+- RSI thresholds
+- Volume confirmation
+
+---
+
+### Opening Range + Fair Value Gap Strategy
+
+Designed for intraday momentum:
+
+1. Detect opening range window.
+2. Identify Fair Value Gap structures.
+3. Validate volume and direction.
+4. Execute with ATR-based risk controls.
+
+Configurable parameters:
+
+- Opening range duration
+- Minimum gap size
+- Entry timeframe
+- Risk/reward target
+- Maximum entry window
+
+---
+
+## ⚙️ Configuration
+
+All trading behavior controlled via:
+
+```
+alpaca_trader/config.json
+```
+
+Key sections:
+
+### Strategy
+
+```
+STRATEGY_MODE
+OR_FVG_ENABLED
+OR_FVG_OPENING_RANGE_MINUTES
+OR_FVG_MIN_GAP_SIZE
+```
+
+### Risk
+
+```
+RISK_PER_TRADE
+ATR_STOP_MULTIPLIER
+MAX_DRAWDOWN
+MIN_RISK_REWARD
+```
 
 ### Filters
-- **REGIME_DETECTION**: Enable market regime detection (default: true)
-- **MULTIFRAME_FILTER**: Enable hourly timeframe confirmation (default: false)
-- **USE_VIX_FILTER**: Filter trades based on VIX (default: false)
-- **VIX_THRESHOLD**: Maximum VIX level to allow trades (default: 30)
-- **USE_200_SMA_FILTER**: Filter based on 200-day SMA (default: false)
-- **VOLUME_MULTIPLIER**: Minimum volume as multiple of average (default: 0.5)
-- **MARKET_HOURS_FILTER**: Only trade during specific hours (default: false)
-- **SKIP_MONDAYS_FRIDAYS**: Skip trading on Mondays and Fridays (default: false)
 
-### Order Execution
-- **USE_LIMIT_ORDERS**: Use limit orders instead of market orders (default: false)
-- **LIMIT_ORDER_TIMEOUT**: Seconds to wait for limit order fill (default: 60)
-- **ENABLE_SLIPPAGE**: Account for slippage in backtesting (default: true)
-- **SLIPPAGE_PCT**: Estimated slippage percentage (default: 0.0005)
-- **COMMISSION_PCT**: Commission percentage per trade (default: 0.0005)
+```
+REGIME_DETECTION
+USE_200_SMA_FILTER
+USE_VIX_FILTER
+MULTIFRAME_FILTER
+```
 
-### Backtesting
-- **BACKTEST_DAYS**: Days of historical data for backtesting (default: 90)
+### Execution
 
-### Advanced Features
-- **USE_PIVOT_POINTS**: Use pivot point analysis (default: false)
-- **USE_FIBONACCI**: Use Fibonacci retracement levels (default: false)
-- **PULLBACK_PERCENTAGE**: Fibonacci pullback level (default: 0.382)
+```
+USE_LIMIT_ORDERS
+LIMIT_ORDER_TIMEOUT
+SLIPPAGE_PCT
+COMMISSION_PCT
+```
 
-## Logging
+---
 
-- `trading.log`: Main trading activity log
-- `debug.log`: Detailed debug information (when DEBUG_MODE is enabled)
-
-## Architecture
+## 🏗 Architecture
 
 ```
 alpaca_trader/
-├── __init__.py         # Package initialization
-├── __main__.py         # Module entry point
-├── api.py              # Alpaca API wrapper with retry logic
-├── engine.py           # Main trading engine
-├── indicators.py       # Technical indicator calculations
-├── filters.py          # Market filters and regime detection
-├── risk.py             # Risk management data structures
-├── utils.py            # Utility functions
-├── config.json         # Configuration parameters
-└── .env                # API credentials (create this)
+├── api.py           # Alpaca API interface
+├── engine.py        # Core trading loop
+├── indicators.py    # Technical analysis
+├── filters.py       # Market condition filters
+├── risk.py          # Risk & position sizing
+├── utils.py         # Helpers
+├── cli.py           # CLI interface
+├── config.json      # Main configuration
 ```
 
-## Warning
+---
 
-**DISCLAIMER: This software is provided for educational and research purposes only. The author is not responsible for any financial losses, damages, or liabilities incurred from using this trading bot. Use at your own risk.**
+## 🔄 How It Works
 
-- Test thoroughly in paper trading before using real capital
-- Past performance does not guarantee future results
-- Trading involves substantial risk of loss
-- Never trade with money you cannot afford to lose
-- This is NOT financial advice
-- Consult a licensed financial advisor before making investment decisions
+1. Load configuration and API credentials
+2. Fetch historical market data
+3. Calculate indicators
+4. Evaluate market regime
+5. Generate trading signals
+6. Validate risk constraints
+7. Execute trades via Alpaca API
+8. Log analytics data
+
+---
+
+## 📊 Design Philosophy
+
+- Config-first architecture
+- Strategy isolation
+- Risk before execution
+- Modular extensibility
+- Research-friendly logging
+
+---
+
+## ⚠️ Important Notes
+
+- Use paper trading first.
+- Algorithmic trading involves financial risk.
+- No strategy guarantees profit.
+
+---
+
+## 🛠 Roadmap (Example)
+
+- Strategy plug-in system
+- ML signal scoring
+- Portfolio-level risk controls
+- Multi-symbol scanning
+- Performance dashboard
+
+---
+
+## Disclaimer
+
+This software is provided for educational and research purposes only.
+
+Not financial advice.
