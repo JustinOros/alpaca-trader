@@ -1670,12 +1670,6 @@ def main():
                         signal = None
                         signal_position_type = None
                     
-                    bars = get_recent_bars(SYMBOL, 50)
-                    if bars is not None:
-                        regime = detect_market_regime(bars, ADX_THRESHOLD)
-                    else:
-                        regime = 'unknown'
-                    
                     if signal in ['buy', 'sell'] and not position_active:
                         debug_print(f"Signal detected: {signal}, executing trade...")
                         buying_power = fetch_buying_power(settlement_tracker)
