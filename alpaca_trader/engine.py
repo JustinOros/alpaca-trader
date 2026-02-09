@@ -808,6 +808,7 @@ def calculate_position_size(equity, stop_loss, current_price):
     if position_value > max_position:
         position_value = max_position
         debug_print(f"Position capped at 25% equity: ${position_value:.2f}")
+    return position_value
 
 class ORFVGState:
     def __init__(self):
