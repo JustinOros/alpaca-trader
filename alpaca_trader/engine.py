@@ -496,7 +496,7 @@ def log_missed_signal(timestamp, signal_type, reject_reason, price_at_signal, sy
             existing = pd.read_csv(SIGNALS_PATH)
             df = pd.concat([existing, df], ignore_index=True)
             cutoff_date = datetime.now(EASTERN) - timedelta(days=30)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
             df = df[df['timestamp'] > cutoff_date]
         
         df.to_csv(SIGNALS_PATH, index=False)
