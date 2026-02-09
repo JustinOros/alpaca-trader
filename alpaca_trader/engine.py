@@ -1911,7 +1911,7 @@ def main():
                     if wait_seconds > 0:
                         logger.info(f"⏰  Next session: {next_open.strftime('%Y-%m-%d %I:%M %p ET')}")
                         logger.info(f"⏳  Sleeping {seconds_to_human_readable(int(wait_seconds))}")
-                        debug_print(f"Sleeping until next market open: {wait_seconds}s")
+                        debug_print(f"Sleeping until next market open: {seconds_to_human_readable(int(wait_seconds))}")
                         time.sleep(wait_seconds)
                     else:
                         time.sleep(60)
