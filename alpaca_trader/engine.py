@@ -1639,6 +1639,7 @@ def main():
                     signal_rsi = 0
                     signal_adx = 0
                     signal_ma_spread = 0
+                    regime = 'unknown'
                     if bars_for_signal is not None and len(bars_for_signal) >= LONG_WINDOW:
                         closes = bars_for_signal['close']
                         highs = bars_for_signal['high']
@@ -1652,6 +1653,7 @@ def main():
                             short_ma = sma(closes, SHORT_WINDOW).iloc[-1]
                             long_ma = sma(closes, LONG_WINDOW).iloc[-1]
                         signal_ma_spread = short_ma - long_ma
+                        regime = detect_market_regime(bars_for_signal, ADX_THRESHOLD)
                     
                     if trades_today >= MAX_TRADES_PER_DAY:
                         if signal in ['buy', 'sell'] and strength > 0:
