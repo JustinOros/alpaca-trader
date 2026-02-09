@@ -35,7 +35,7 @@
     "VIX_THRESHOLD": 30,
     "USE_VIX_FILTER": false,
     "USE_FIBONACCI": false,
-    "MAX_TRADES_PER_DAY": 100,
+    "MAX_TRADES_PER_DAY": 3,
     "SKIP_MONDAYS_FRIDAYS": false,
     "USE_200_SMA_FILTER": false,
     "REQUIRE_MACD_CONFIRMATION": false,
