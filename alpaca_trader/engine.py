@@ -60,17 +60,17 @@ ENV_PATH = SCRIPT_DIR / ".env"
 DEFAULT_CONFIG = {
     "DEBUG_MODE": True,
     "SYMBOL": "SPY",
-    "BAR_TIMEFRAME": "5Min",
+    "BAR_TIMEFRAME": "15Min",
     "RISK_PER_TRADE": 0.01,
-    "SHORT_WINDOW": 10,
-    "LONG_WINDOW": 30,
+    "SHORT_WINDOW": 20,
+    "LONG_WINDOW": 50,
     "MIN_NOTIONAL": 1.0,
-    "POLL_INTERVAL": 30,
+    "POLL_INTERVAL": 300,
     "MAX_DRAWDOWN": 0.08,
     "PDT_RULE": False,
     "USE_TRAILING_STOP": True,
     "PROFIT_TARGET_1": 2.0,
-    "PROFIT_TARGET_2": 4.0,
+    "PROFIT_TARGET_2": 3.0,
     "VOLATILITY_ADJUSTMENT": True,
     "MARKET_HOURS_FILTER": False,
     "ENABLE_SLIPPAGE": True,
@@ -80,12 +80,12 @@ DEFAULT_CONFIG = {
     "BACKTEST_DAYS": 90,
     "USE_LIMIT_ORDERS": False,
     "LIMIT_ORDER_TIMEOUT": 60,
-    "ADX_THRESHOLD": 30,
+    "ADX_THRESHOLD": 25,
     "VOLUME_MULTIPLIER": 0.7,
     "ATR_STOP_MULTIPLIER": 2.0,
-    "MAX_HOLD_TIME": 3600,
+    "MAX_HOLD_TIME": 10800,
     "REGIME_DETECTION": True,
-    "MULTIFRAME_FILTER": False,
+    "MULTIFRAME_FILTER": True,
     "BB_WINDOW": 20,
     "BB_STD": 2.0,
     "USE_EMA": True,
@@ -96,7 +96,7 @@ DEFAULT_CONFIG = {
     "USE_FIBONACCI": False,
     "MAX_TRADES_PER_DAY": 3,
     "SKIP_MONDAYS_FRIDAYS": False,
-    "USE_200_SMA_FILTER": False,
+    "USE_200_SMA_FILTER": True,
     "REQUIRE_MACD_CONFIRMATION": False,
     "MIN_RISK_REWARD": 2.0,
     "PULLBACK_PERCENTAGE": 0.382,
@@ -1074,6 +1074,12 @@ def advanced_signal_generator(symbol):
         else:
             debug_print("Volume filter failed: insufficient data")
         return None, 0, 0, None
+    
+    if USE_200_SMA_FILTER:
+        sma_200_pass = check_200_sma_filter(symbol, api)
+        if not sma_200_pass:
+            debug_print("200 SMA filter failed: price below 200 SMA")
+            return None, 0, 0, None
     
     bullish_pattern, bearish_pattern = check_candle_pattern(bars)
     macd_signal = check_macd_confirmation(bars)
