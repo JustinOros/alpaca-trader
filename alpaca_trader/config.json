@@ -1,6 +1,6 @@
 {
     "DEBUG_MODE": true,
-    "SYMBOL": "SPY",
+    "SYMBOL": "QQQ",
     "BAR_TIMEFRAME": "5Min",
     "RISK_PER_TRADE": 0.01,
     "SHORT_WINDOW": 10,

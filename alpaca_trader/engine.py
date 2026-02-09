@@ -526,8 +526,8 @@ def log_daily_performance(date, opening_equity, closing_equity, total_trades, wi
         if PERFORMANCE_PATH.exists():
             existing = pd.read_csv(PERFORMANCE_PATH)
             df = pd.concat([existing, df], ignore_index=True)
-            cutoff_date = datetime.now(EASTERN) - timedelta(days=180)
-            df['date'] = pd.to_datetime(df['date'])
+            cutoff_date = (datetime.now(EASTERN) - timedelta(days=180)).date()
+            df['date'] = pd.to_datetime(df['date']).dt.date
             df = df[df['date'] > cutoff_date]
         
         df.to_csv(PERFORMANCE_PATH, index=False)
