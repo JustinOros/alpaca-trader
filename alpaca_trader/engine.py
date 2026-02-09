@@ -468,7 +468,7 @@ def log_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, shar
             existing = pd.read_csv(TRADES_PATH)
             df = pd.concat([existing, df], ignore_index=True)
             cutoff_date = datetime.now(EASTERN) - timedelta(days=90)
-            df['entry_time'] = pd.to_datetime(df['entry_time'])
+            df['entry_time'] = pd.to_datetime(df['entry_time'], format='ISO8601')
             df = df[df['entry_time'] > cutoff_date]
         
         df.to_csv(TRADES_PATH, index=False)
