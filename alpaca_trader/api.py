@@ -1,6 +1,13 @@
 import time
+import logging
 import backoff
 import alpaca_trade_api as tradeapi
+
+logging.getLogger('backoff').setLevel(logging.CRITICAL)
+
+
+def _is_position_not_found(e):
+    return isinstance(e, tradeapi.rest.APIError) and "position does not exist" in str(e)
 
 
 class AlpacaClient:
@@ -50,7 +57,7 @@ class AlpacaClient:
     def close_all_positions(self):
         return self.api.close_all_positions()
     
-    @backoff.on_exception(backoff.expo, (tradeapi.rest.APIError, ConnectionError), max_tries=5, jitter=backoff.full_jitter)
+    @backoff.on_exception(backoff.expo, (tradeapi.rest.APIError, ConnectionError), max_tries=5, jitter=backoff.full_jitter, giveup=_is_position_not_found)
     def get_position(self, symbol):
         return self.api.get_position(symbol)
     

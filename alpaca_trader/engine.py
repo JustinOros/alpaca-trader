@@ -1327,6 +1327,7 @@ def main():
                 max_intraday_drawdown = 0
                 last_indicator_log = datetime.now(EASTERN)
                 
+                logger.info("🔎  Checking for existing positions...")
                 try:
                     existing_position = api.get_position(SYMBOL)
                     qty = float(existing_position.qty)
@@ -1360,7 +1361,8 @@ def main():
                         if USE_TRAILING_STOP:
                             position_state.trailing_stop = stop_loss
                 except Exception as e:
-                    debug_print(f"No existing position found or error during recovery: {e}")
+                    logger.info("🔎  No open positions found")
+                    debug_logger.debug(f"Position check exception: {e}")
                 
                 retry_count = 0
                 max_retries = 3
