@@ -111,6 +111,5 @@ class AlpacaClient:
                 return float(status.filled_avg_price)
             return None
         except Exception as e:
-            import logging
             logging.error(f"Order placement error: {e}")
             return None
