@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
     "MIN_NOTIONAL": 1.0,
     "POLL_INTERVAL": 300,
     "MAX_DRAWDOWN": 0.08,
-    "PDT_RULE": False,
+    "PDT_RULE": True,
     "USE_TRAILING_STOP": True,
     "PROFIT_TARGET_1": 2.0,
     "PROFIT_TARGET_2": 3.0,
