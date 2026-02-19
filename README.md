@@ -85,7 +85,7 @@ Supports multiple strategy modes:
 - Commission modeling
 - Cash account compatibility
 - T+1 settlement handling
-- PDT rule awareness
+- PDT rolling 5-day window enforcement
 
 ### Market Filters
 
@@ -101,16 +101,15 @@ Supports multiple strategy modes:
 Automatically generates:
 
 ```
-logs/
+alpaca_trader/
 ├── trading.log
 ├── debug.log
-
-data/
 ├── trades.csv
 ├── signals.csv
 ├── performance.csv
 ├── indicators.csv
 ├── session.csv
+├── pdt_tracker.csv
 ```
 
 ---
