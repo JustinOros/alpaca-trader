@@ -8,7 +8,7 @@
     "MIN_NOTIONAL": 1.0,
     "POLL_INTERVAL": 300,
     "MAX_DRAWDOWN": 0.08,
-    "PDT_RULE": false,
+    "PDT_RULE": true,
     "USE_TRAILING_STOP": true,
     "PROFIT_TARGET_1": 2.0,
     "PROFIT_TARGET_2": 3.0,

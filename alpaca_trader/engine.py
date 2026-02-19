@@ -259,9 +259,6 @@ MIN_NOTIONAL = float(config["MIN_NOTIONAL"])
 POLL_INTERVAL = int(config["POLL_INTERVAL"])
 MAX_DRAWDOWN = float(config["MAX_DRAWDOWN"])
 PDT_RULE = bool(config["PDT_RULE"])
-if PDT_RULE:
-    _startup_pdt = PDTTracker()
-    logger.info(f"    PDT Rule Enforcement: ON ({_startup_pdt.rolling_count()}/3 trades used, {_startup_pdt.remaining()} remaining this window)")
 USE_TRAILING_STOP = bool(config["USE_TRAILING_STOP"])
 PROFIT_TARGET_1 = float(config["PROFIT_TARGET_1"])
 PROFIT_TARGET_2 = float(config["PROFIT_TARGET_2"])
@@ -425,6 +422,10 @@ class PositionState:
 
 signal_state = SignalState()
 position_state = PositionState()
+
+if PDT_RULE:
+    _startup_pdt = PDTTracker()
+    logger.info(f"    PDT Rule Enforcement: ON ({_startup_pdt.rolling_count()}/3 trades used, {_startup_pdt.remaining()} remaining this window)")
 
 def save_session_state(trades_today, opening_equity, last_bullish_crossover, last_bearish_crossover, session_date):
     try:
