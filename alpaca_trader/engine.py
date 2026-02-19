@@ -35,6 +35,7 @@ TRADES_PATH = SCRIPT_DIR / "trades.csv"
 SIGNALS_PATH = SCRIPT_DIR / "signals.csv"
 PERFORMANCE_PATH = SCRIPT_DIR / "performance.csv"
 INDICATORS_PATH = SCRIPT_DIR / "indicators.csv"
+PDT_TRACKER_PATH = SCRIPT_DIR / "pdt_tracker.csv"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -258,6 +259,9 @@ MIN_NOTIONAL = float(config["MIN_NOTIONAL"])
 POLL_INTERVAL = int(config["POLL_INTERVAL"])
 MAX_DRAWDOWN = float(config["MAX_DRAWDOWN"])
 PDT_RULE = bool(config["PDT_RULE"])
+if PDT_RULE:
+    _startup_pdt = PDTTracker()
+    logger.info(f"    PDT Rule Enforcement: ON ({_startup_pdt.rolling_count()}/3 trades used, {_startup_pdt.remaining()} remaining this window)")
 USE_TRAILING_STOP = bool(config["USE_TRAILING_STOP"])
 PROFIT_TARGET_1 = float(config["PROFIT_TARGET_1"])
 PROFIT_TARGET_2 = float(config["PROFIT_TARGET_2"])
@@ -348,6 +352,57 @@ class SettlementTracker:
     
     def reset(self):
         self.pending_settlements = {}
+
+
+class PDTTracker:
+    PDT_LIMIT = 3
+
+    def __init__(self):
+        self.trade_dates = self._load()
+
+    def _load(self):
+        try:
+            if not PDT_TRACKER_PATH.exists():
+                return []
+            df = pd.read_csv(PDT_TRACKER_PATH)
+            return [datetime.fromisoformat(ts).date() for ts in df['trade_date'].tolist()]
+        except Exception:
+            return []
+
+    def _save(self):
+        try:
+            df = pd.DataFrame({'trade_date': [d.isoformat() for d in self.trade_dates]})
+            df.to_csv(PDT_TRACKER_PATH, index=False)
+        except Exception as e:
+            debug_print(f"PDT tracker save error: {e}")
+
+    def _rolling_window_dates(self):
+        today = datetime.now(EASTERN).date()
+        trading_days = []
+        d = today
+        while len(trading_days) < 5:
+            if d.weekday() < 5:
+                trading_days.append(d)
+            d -= timedelta(days=1)
+        return set(trading_days)
+
+    def rolling_count(self):
+        window = self._rolling_window_dates()
+        return sum(1 for d in self.trade_dates if d in window)
+
+    def can_trade(self):
+        return self.rolling_count() < self.PDT_LIMIT
+
+    def record_trade(self):
+        today = datetime.now(EASTERN).date()
+        self.trade_dates.append(today)
+        cutoff = today - timedelta(days=30)
+        self.trade_dates = [d for d in self.trade_dates if d >= cutoff]
+        self._save()
+        debug_print(f"PDT trade recorded. Rolling 5-day count: {self.rolling_count()}/{self.PDT_LIMIT}")
+
+    def remaining(self):
+        return max(0, self.PDT_LIMIT - self.rolling_count())
 
 
 class SignalState:
@@ -1288,6 +1343,7 @@ def main():
                 logger.info(f"💵  Starting equity: ${opening_equity:.2f}")
                 
                 settlement_tracker = SettlementTracker()
+                pdt_tracker = PDTTracker() if PDT_RULE else None
                 
                 if T1_SETTLEMENT_ENABLED:
                     settlement_tracker.settle_funds(current_date)
@@ -1670,6 +1726,14 @@ def main():
                         debug_print(f"Daily trade limit reached ({trades_today}/{MAX_TRADES_PER_DAY})")
                         time.sleep(POLL_INTERVAL)
                         continue
+
+                    if PDT_RULE and pdt_tracker and not pdt_tracker.can_trade():
+                        if signal in ['buy', 'sell'] and strength > 0:
+                            log_missed_signal(datetime.now(EASTERN), signal, 'pdt_limit', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
+                        logger.warning(f"🚫  PDT limit reached ({pdt_tracker.rolling_count()}/3 trades in rolling 5-day window) - monitoring only")
+                        debug_print(f"PDT limit reached, skipping signal")
+                        time.sleep(POLL_INTERVAL)
+                        continue
                     
                     if signal == 'sell' and not ENABLE_SHORT_SELLING:
                         debug_print("Short selling disabled, ignoring sell signal")
@@ -1704,6 +1768,8 @@ def main():
                             if execution_price:
                                 trade_count += 1
                                 trades_today += 1
+                                if PDT_RULE and pdt_tracker:
+                                    pdt_tracker.record_trade()
                                 entry_price = execution_price
                                 entry_time = datetime.now(EASTERN)
                                 stop_loss = signal_stop_loss
