@@ -371,7 +371,7 @@ class PDTTracker:
             df = pd.DataFrame({'trade_date': [d.isoformat() for d in self.trade_dates]})
             df.to_csv(PDT_TRACKER_PATH, index=False)
         except Exception as e:
-            debug_print(f"PDT tracker save error: {e}")
+            debug_logger.debug(f"PDT tracker save error: {e}")
 
     def _rolling_window_dates(self):
         today = datetime.now(EASTERN).date()
@@ -396,10 +396,19 @@ class PDTTracker:
         cutoff = today - timedelta(days=30)
         self.trade_dates = [d for d in self.trade_dates if d >= cutoff]
         self._save()
-        debug_print(f"PDT trade recorded. Rolling 5-day count: {self.rolling_count()}/{self.PDT_LIMIT}")
+        debug_logger.debug(f"PDT trade recorded. Rolling 5-day count: {self.rolling_count()}/{self.PDT_LIMIT}")
 
     def remaining(self):
         return max(0, self.PDT_LIMIT - self.rolling_count())
+
+    def sync_from_broker(self, broker_count):
+        today = datetime.now(EASTERN).date()
+        today_count = sum(1 for d in self.trade_dates if d == today)
+        if broker_count > today_count:
+            for _ in range(broker_count - today_count):
+                self.trade_dates.append(today)
+            self._save()
+            debug_logger.debug(f"PDT synced from broker: {broker_count} trades today, rolling count now {self.rolling_count()}/{self.PDT_LIMIT}")
 
 
 class SignalState:
@@ -425,6 +434,7 @@ position_state = PositionState()
 
 if PDT_RULE:
     _startup_pdt = PDTTracker()
+    _startup_pdt.sync_from_broker(daytrade_count)
     logger.info(f"    PDT Rule Enforcement: ON ({_startup_pdt.rolling_count()}/3 trades used, {_startup_pdt.remaining()} remaining this window)")
 
 def save_session_state(trades_today, opening_equity, last_bullish_crossover, last_bearish_crossover, session_date):
