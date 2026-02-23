@@ -1,12 +1,15 @@
 import time
 import logging
 import backoff
+import concurrent.futures
 import alpaca_trade_api as tradeapi
 import requests.exceptions
 
 logging.getLogger('backoff').setLevel(logging.CRITICAL)
 
-_RETRYABLE_ERRORS = (tradeapi.rest.APIError, ConnectionError, requests.exceptions.ConnectionError)
+BARS_REQUEST_TIMEOUT = 30  
+
+_RETRYABLE_ERRORS = (tradeapi.rest.APIError, ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.Timeout, TimeoutError)
 
 
 def _is_position_not_found(e):
@@ -27,10 +30,19 @@ class AlpacaClient:
     
     @backoff.on_exception(backoff.expo, _RETRYABLE_ERRORS, max_tries=5, jitter=backoff.full_jitter)
     def get_bars(self, symbol, timeframe, **kwargs):
-        bars = self.api.get_bars(symbol, timeframe, **kwargs)
-        if bars is None:
-            return None
-        return bars.df
+        def _fetch():
+            bars = self.api.get_bars(symbol, timeframe, **kwargs)
+            if bars is None:
+                return None
+            return bars.df
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_fetch)
+            try:
+                return future.result(timeout=BARS_REQUEST_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                logging.warning(f"get_bars timed out after {BARS_REQUEST_TIMEOUT}s for {symbol} {timeframe}")
+                raise TimeoutError(f"get_bars hung for {symbol} {timeframe}")
     
     @backoff.on_exception(backoff.expo, _RETRYABLE_ERRORS, max_tries=5, jitter=backoff.full_jitter)
     def get_latest_quote(self, symbol):
