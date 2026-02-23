@@ -632,7 +632,7 @@ def log_indicators(timestamp, symbol, price, volume, rsi_val, adx_val, atr_val, 
 def debug_print(message):
     if DEBUG_MODE:
         debug_logger.debug(f"🔎  {message}")
-        print(f"{datetime.now(EASTERN).strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} - DEBUG - 🔎  {message}", flush=True)
+        print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} - DEBUG - 🔎  {message}", flush=True)
 
 def fetch_equity():
     debug_print("Fetching account equity")
