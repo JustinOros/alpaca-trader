@@ -1991,7 +1991,11 @@ def main():
                         logger.info(f"⏰  Next session: {next_open.strftime('%Y-%m-%d %I:%M %p ET')}")
                         logger.info(f"⏳  Sleeping {seconds_to_human_readable(int(wait_seconds))}")
                         debug_print(f"Sleeping until next market open: {seconds_to_human_readable(int(wait_seconds))}")
-                        time.sleep(wait_seconds)
+                        while True:
+                            remaining = (next_open - datetime.now(EASTERN)).total_seconds()
+                            if remaining <= 0:
+                                break
+                            time.sleep(min(remaining, 3600))
                     else:
                         time.sleep(60)
                 else:
