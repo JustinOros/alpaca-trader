@@ -664,7 +664,9 @@ def fetch_buying_power(settlement_tracker=None):
 def get_recent_bars(symbol, limit=100):
     debug_print(f"Fetching {limit} bars for {symbol} ({BAR_TIMEFRAME})")
     try:
-        bars = api.get_bars(symbol, BAR_TIMEFRAME, limit=limit)
+        buffer = int(limit * 1.5)
+        start = (datetime.now(EASTERN) - timedelta(days=buffer)).strftime("%Y-%m-%d")
+        bars = api.get_bars(symbol, BAR_TIMEFRAME, limit=limit, start=start)
         if bars is None or len(bars) == 0:
             debug_print(f"No bars returned for {symbol}")
             return None
