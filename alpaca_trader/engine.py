@@ -1851,7 +1851,7 @@ def main():
                             pnl_pct = 0
                         status_msg += f" | PnL: {pnl_pct:+.2f}%"
                     
-                    status_msg += f" | H:{hourly_trend} | VIX:{vix_level:.1f} | {trades_today}/{MAX_TRADES_PER_DAY}"
+                    status_msg += f" | Hourly:{hourly_trend} | VIX:{vix_level:.1f} | Trades: {trades_today}/{MAX_TRADES_PER_DAY}"
                     logger.info(status_msg)
                     
                     vix_readings.append(vix_level)
