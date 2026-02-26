@@ -1342,8 +1342,12 @@ def main():
                     next_open = clock.next_open.astimezone(EASTERN)
                     wait_time = (next_open - datetime.now(EASTERN)).total_seconds()
                     logger.info(f"🌙  Market closed. Next open: {next_open.strftime('%I:%M %p ET on %A, %B %d')}")
-                    debug_print(f"Market closed, waiting {seconds_to_human_readable(int(wait_time))} until next open")
-                    time.sleep(min(wait_time, 3600))
+                    debug_print(f"Market closed, waiting {seconds_to_human_readable(int(max(wait_time, 0)))} until next open")
+                    while True:
+                        remaining = (next_open - datetime.now(EASTERN)).total_seconds()
+                        if remaining <= 0:
+                            break
+                        time.sleep(min(remaining, 3600))
                     continue
                 
                 logger.info("🔔  Market open - session starting")
