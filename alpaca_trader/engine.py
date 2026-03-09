@@ -163,6 +163,7 @@ BAR_TIMEFRAME = config.get("BAR_TIMEFRAME", "5Min")
 RISK_PER_TRADE = float(config["RISK_PER_TRADE"])
 SHORT_WINDOW = int(config["SHORT_WINDOW"])
 LONG_WINDOW = int(config["LONG_WINDOW"])
+ENABLE_SHORT_SELLING = bool(config.get("ENABLE_SHORT_SELLING", False))
 
 STRATEGY_MODE = config.get("STRATEGY_MODE", "ma_crossover")
 OR_FVG_ENABLED = bool(config.get("OR_FVG_ENABLED", False))
@@ -291,7 +292,6 @@ USE_200_SMA_FILTER = bool(config["USE_200_SMA_FILTER"])
 REQUIRE_MACD_CONFIRMATION = bool(config["REQUIRE_MACD_CONFIRMATION"])
 MIN_RISK_REWARD = float(config["MIN_RISK_REWARD"])
 PULLBACK_PERCENTAGE = float(config["PULLBACK_PERCENTAGE"])
-ENABLE_SHORT_SELLING = bool(config.get("ENABLE_SHORT_SELLING", False))
 RSI_BUY_MAX = float(config.get("RSI_BUY_MAX", 55))
 RSI_SELL_MIN = float(config.get("RSI_SELL_MIN", 45))
 RSI_SELL_MAX = float(config.get("RSI_SELL_MAX", 70))
@@ -876,6 +876,10 @@ def calculate_position_size(equity, stop_loss, current_price):
     if position_value > max_position:
         position_value = max_position
         debug_print(f"Position capped at 25% equity: ${position_value:.2f}")
+    if position_value < MIN_NOTIONAL:
+        position_value = MIN_NOTIONAL
+        debug_print(f"Position set to minimum: ${position_value:.2f}")
+    debug_print(f"Calculated position size: ${position_value:.2f}")
     return position_value
 
 class ORFVGState:
@@ -918,18 +922,18 @@ def detect_fair_value_gap(bars, min_gap_pct=0.05):
         if bullish_gap:
             gap_size = candle_3_low - candle_1_high
             if candle_2_high > 0:
-                gap_pct = (gap_size / candle_2_high) * 100
+                gap_pct = gap_size / candle_2_high
                 if gap_pct >= min_gap_pct:
-                    debug_print(f"Bullish FVG detected: gap={gap_size:.2f} ({gap_pct:.2f}%)")
+                    debug_print(f"Bullish FVG detected: gap={gap_size:.2f} ({gap_pct*100:.2f}%)")
                     return "bullish", i + 2
         
         bearish_gap = candle_3_high < candle_1_low
         if bearish_gap:
             gap_size = candle_1_low - candle_3_high
             if candle_2_low > 0:
-                gap_pct = (gap_size / candle_2_low) * 100
+                gap_pct = gap_size / candle_2_low
                 if gap_pct >= min_gap_pct:
-                    debug_print(f"Bearish FVG detected: gap={gap_size:.2f} ({gap_pct:.2f}%)")
+                    debug_print(f"Bearish FVG detected: gap={gap_size:.2f} ({gap_pct*100:.2f}%)")
                     return "bearish", i + 2
     
     return None, None
@@ -1060,12 +1064,6 @@ def or_fvg_signal_generator(symbol):
     
     return signal, strength, stop_loss, position_type
 
-    if position_value < MIN_NOTIONAL:
-        position_value = MIN_NOTIONAL
-        debug_print(f"Position set to minimum: ${position_value:.2f}")
-    debug_print(f"Calculated position size: ${position_value:.2f}")
-    return position_value
-
 def advanced_signal_generator(symbol):
     debug_print(f"Generating signal for {symbol}")
     bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
@@ -1161,7 +1159,11 @@ def advanced_signal_generator(symbol):
     stop = 0
     position_type = None
     
-    if regime == "trend":
+    effective_regime = regime
+    if regime in ("high_vol", "low_vol"):
+        effective_regime = "trend"
+    
+    if effective_regime == "trend":
         if short_ma > long_ma and rsi_val < RSI_BUY_MAX:
             if REQUIRE_MA_CROSSOVER and not bullish_crossover:
                 debug_print("Bullish signal rejected: no recent crossover")
@@ -1190,7 +1192,7 @@ def advanced_signal_generator(symbol):
                 position_type = "short"
                 debug_print(f"SELL signal: strength={strength:.2f}, stop=${stop:.2f}")
     
-    elif regime == "range":
+    elif effective_regime == "range":
         if current_price <= lower.iloc[-1] and rsi_val < RSI_RANGE_OVERSOLD:
             if REQUIRE_CANDLE_PATTERN and not bullish_pattern:
                 debug_print("Range buy rejected: candle pattern required")
@@ -1226,7 +1228,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
     
     if entry_price <= 0:
         debug_print("Invalid entry_price, skipping scale out")
-        return False
+        return False, None
     
     if position_type == 'long':
         profit_pct = ((current_price - entry_price) / entry_price) * 100
@@ -2034,3 +2036,4 @@ def run():
 
 if __name__ == "__main__":
     main()
+

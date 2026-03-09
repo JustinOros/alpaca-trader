@@ -36,18 +36,16 @@ def check_macd_confirmation(bars: pd.DataFrame):
 def check_200_sma_filter(symbol: str, client: AlpacaClient):
     daily = client.get_bars(symbol, "1Day", limit=210)
     if len(daily) < 200:
-        return "neutral"
+        return True
     sma_200 = sma(daily["close"], 200).iloc[-1]
     price = daily["close"].iloc[-1]
-    if price > sma_200 * 1.01:
-        return "bullish"
     if price < sma_200 * 0.99:
-        return "bearish"
-    return "neutral"
+        return False
+    return True
 
 def check_multiframe_confluence(symbol: str, use_ema: bool, client: AlpacaClient = None):
     if client is None:
-        from .engine import api as client
+        return "neutral"
     hourly = client.get_bars(symbol, "1Hour", limit=50)
     if len(hourly) < 50:
         return "neutral"
@@ -99,3 +97,4 @@ def get_vix(client: AlpacaClient, symbol: str, use_vix_filter: bool):
         logger.warning(f"Could not calculate volatility: {e}")
     logger.warning("VIX data unavailable, skipping VIX filter for this iteration")
     return 0
+
