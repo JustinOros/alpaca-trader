@@ -1340,7 +1340,11 @@ def main():
         while True:
             try:
                 clock = api.get_clock()
-                if not clock.is_open:
+                now_et = datetime.now(EASTERN)
+                market_open_time = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                market_close_time = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+                time_based_open = now_et.weekday() < 5 and market_open_time <= now_et < market_close_time
+                if not clock.is_open and not time_based_open:
                     next_open = clock.next_open.astimezone(EASTERN)
                     wait_time = (next_open - datetime.now(EASTERN)).total_seconds()
                     logger.info(f"🌙  Market closed. Next open: {next_open.strftime('%I:%M %p ET on %A, %B %d')}")
