@@ -1,5 +1,7 @@
 import time
+import math
 import logging
+from datetime import datetime, timedelta, timezone
 import backoff
 import concurrent.futures
 import alpaca_trade_api as tradeapi
@@ -10,6 +12,15 @@ logging.getLogger('backoff').setLevel(logging.CRITICAL)
 BARS_REQUEST_TIMEOUT = 30  
 
 _RETRYABLE_ERRORS = (tradeapi.rest.APIError, ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.Timeout, TimeoutError)
+
+
+def _timeframe_minutes(timeframe):
+    tf = str(timeframe).lower()
+    for suffix, mult in (("min", 1), ("hour", 60), ("day", 390), ("week", 1950), ("month", 8190)):
+        if tf.endswith(suffix):
+            num = tf[: -len(suffix)]
+            return (int(num) if num.isdigit() else 1) * mult
+    return 390
 
 
 def _is_position_not_found(e):
@@ -44,6 +55,18 @@ class AlpacaClient:
                 logging.warning(f"get_bars timed out after {BARS_REQUEST_TIMEOUT}s for {symbol} {timeframe}")
                 raise TimeoutError(f"get_bars hung for {symbol} {timeframe}")
     
+    def get_latest_bars(self, symbol, timeframe, count):
+        minutes = _timeframe_minutes(timeframe)
+        trading_days = math.ceil(count * minutes / 390)
+        if minutes < 390:
+            trading_days = trading_days * 2 + 3
+        calendar_days = int(trading_days * 1.5) + 7
+        start = (datetime.now(timezone.utc) - timedelta(days=calendar_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        df = self.get_bars(symbol, timeframe, start=start)
+        if df is None or len(df) == 0:
+            return df
+        return df.sort_index().tail(count)
+
     @backoff.on_exception(backoff.expo, _RETRYABLE_ERRORS, max_tries=5, jitter=backoff.full_jitter)
     def get_latest_quote(self, symbol):
         return self.api.get_latest_quote(symbol)
@@ -75,6 +98,10 @@ class AlpacaClient:
     @backoff.on_exception(backoff.expo, _RETRYABLE_ERRORS, max_tries=5, jitter=backoff.full_jitter, giveup=_is_position_not_found)
     def get_position(self, symbol):
         return self.api.get_position(symbol)
+
+    @backoff.on_exception(backoff.expo, _RETRYABLE_ERRORS, max_tries=5, jitter=backoff.full_jitter, giveup=_is_position_not_found)
+    def close_position(self, symbol):
+        return self.api.close_position(symbol)
     
     def place_order(self, symbol, side, notional, limit_price, limit_order_timeout):
         try:

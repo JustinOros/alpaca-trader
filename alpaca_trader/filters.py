@@ -34,8 +34,8 @@ def check_macd_confirmation(bars: pd.DataFrame):
     return "neutral"
 
 def check_200_sma_filter(symbol: str, client: AlpacaClient):
-    daily = client.get_bars(symbol, "1Day", limit=210)
-    if len(daily) < 200:
+    daily = client.get_latest_bars(symbol, "1Day", 210)
+    if daily is None or len(daily) < 200:
         return True
     sma_200 = sma(daily["close"], 200).iloc[-1]
     price = daily["close"].iloc[-1]
@@ -46,8 +46,8 @@ def check_200_sma_filter(symbol: str, client: AlpacaClient):
 def check_multiframe_confluence(symbol: str, use_ema: bool, client: AlpacaClient = None):
     if client is None:
         return "neutral"
-    hourly = client.get_bars(symbol, "1Hour", limit=50)
-    if len(hourly) < 50:
+    hourly = client.get_latest_bars(symbol, "1Hour", 50)
+    if hourly is None or len(hourly) < 50:
         return "neutral"
     if use_ema:
         short = ema(hourly["close"], 20).iloc[-1]
@@ -81,13 +81,13 @@ def get_vix(client: AlpacaClient, symbol: str, use_vix_filter: bool):
     if not use_vix_filter:
         return 0
     try:
-        vix = client.get_bars("VIX", "1Day", limit=5)
+        vix = client.get_latest_bars("VIX", "1Day", 5)
         if len(vix) > 0:
             return vix["close"].iloc[-1]
     except Exception as e:
         logger.warning(f"VIX data unavailable: {e}")
     try:
-        spy = client.get_bars(symbol, "1Day", limit=20)
+        spy = client.get_latest_bars(symbol, "1Day", 20)
         if len(spy) >= 20:
             returns = spy["close"].pct_change()
             calculated_vix = returns.std() * (252 ** 0.5) * 100

@@ -664,9 +664,7 @@ def fetch_buying_power(settlement_tracker=None):
 def get_recent_bars(symbol, limit=100):
     debug_print(f"Fetching {limit} bars for {symbol} ({BAR_TIMEFRAME})")
     try:
-        buffer = int(limit * 1.5)
-        start = (datetime.now(EASTERN) - timedelta(days=buffer)).strftime("%Y-%m-%d")
-        bars = api.get_bars(symbol, BAR_TIMEFRAME, limit=limit, start=start)
+        bars = api.get_latest_bars(symbol, BAR_TIMEFRAME, limit)
         if bars is None or len(bars) == 0:
             debug_print(f"No bars returned for {symbol}")
             return None
@@ -701,6 +699,18 @@ def close_all_positions():
     except Exception as e:
         logger.error(f"Error closing positions: {e}")
         debug_print(f"Error closing positions: {e}")
+
+def close_symbol_position(symbol):
+    debug_print(f"Closing position for {symbol}")
+    try:
+        if current_position_qty(symbol) == 0:
+            debug_print(f"No {symbol} position to close")
+            return
+        api.close_position(symbol)
+        logger.info(f"✅  {symbol} position closed")
+    except Exception as e:
+        logger.error(f"Error closing {symbol} position: {e}")
+        debug_print(f"Error closing {symbol} position: {e}")
 
 def get_bid_ask(symbol):
     debug_print(f"Getting bid/ask for {symbol}")
@@ -990,7 +1000,7 @@ def or_fvg_signal_generator(symbol):
         debug_print("Opening range not yet set")
         return None, 0, 0, None
     
-    bars_1min = api.get_bars(symbol, OR_FVG_ENTRY_TIMEFRAME, limit=50)
+    bars_1min = api.get_latest_bars(symbol, OR_FVG_ENTRY_TIMEFRAME, 50)
     if bars_1min is None or len(bars_1min) == 0:
         debug_print("No 1-min bars available")
         return None, 0, 0, None
@@ -1445,6 +1455,7 @@ def main():
                 
                 retry_count = 0
                 max_retries = 3
+                halted_for_day = False
                 
                 while clock.is_open:
                     try:
@@ -1457,13 +1468,18 @@ def main():
                     current_equity = fetch_equity()
                     drawdown = (opening_equity - current_equity) / opening_equity if opening_equity > 0 else 0
                     
-                    if drawdown > MAX_DRAWDOWN:
+                    if drawdown > MAX_DRAWDOWN and not halted_for_day:
                         logger.warning(f"⚠️  Max drawdown reached: {drawdown:.2%}")
                         debug_print(f"Max drawdown triggered: {drawdown:.2%}")
-                        close_all_positions()
+                        close_symbol_position(SYMBOL)
+                        position_active = False
+                        position_state.reset()
+                        halted_for_day = True
                         logger.info("🛑  Trading halted for the day")
-                        time.sleep(3600)
-                        break
+                    
+                    if halted_for_day:
+                        time.sleep(POLL_INTERVAL)
+                        continue
                     
                     bars = get_recent_bars(SYMBOL, 10)
                     if bars is None or len(bars) == 0:
@@ -1951,7 +1967,7 @@ def main():
                             0
                         )
                 
-                close_all_positions()
+                close_symbol_position(SYMBOL)
                 
                 final_equity = fetch_equity()
                 session_pnl = final_equity - opening_equity
@@ -2025,7 +2041,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("🛑  User interrupt")
         debug_print("User interrupt detected")
-        close_all_positions()
+        close_symbol_position(SYMBOL)
     except Exception as e:
         logger.error(f"💥  Fatal error: {e}")
         debug_print(f"Fatal error: {e}")
