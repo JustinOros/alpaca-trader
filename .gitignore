@@ -14,3 +14,4 @@ alpaca_trader/performance.csv
 alpaca_trader/indicators.csv
 alpaca_trader/session.csv
 alpaca_trader/pdt_tracker.csv
+alpaca_trader/base_state.json
