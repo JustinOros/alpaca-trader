@@ -188,6 +188,8 @@ class Backtester:
         self.comm = float(config.get("COMMISSION_PCT", 0.0))
         self.min_notional = float(config.get("MIN_NOTIONAL", 1.0))
         self.use_200 = bool(config.get("USE_200_SMA_FILTER", False))
+        self.sizing = str(config.get("POSITION_SIZING", "risk")).lower()
+        self.max_position_pct = float(config.get("MAX_POSITION_PCT", 0.25))
         self.hold_overnight = bool(config.get("HOLD_OVERNIGHT", False))
         self.exit_on_flip = bool(config.get("EXIT_ON_TREND_FLIP", False))
         self.cash = capital
@@ -208,11 +210,20 @@ class Backtester:
             return self.cash + self.pos["shares"] * price
         return self.cash - self.pos["shares"] * price
 
+    def exposure(self, price):
+        if self.pos is None:
+            return 0.0
+        eq = self.equity(price)
+        return self.pos["shares"] * price / eq if eq > 0 else 0.0
+
     def open_position(self, sig, price, t, equity, day_bars):
-        risk_amount = equity * self.risk
-        price_risk = abs(price - sig["stop"])
-        value = self.min_notional if price_risk == 0 else (risk_amount / price_risk) * price
-        value = max(self.min_notional, min(value, equity * 0.25))
+        cap = equity * self.max_position_pct
+        if self.sizing == "fixed":
+            value = cap
+        else:
+            price_risk = abs(price - sig["stop"])
+            value = self.min_notional if price_risk == 0 else min((equity * self.risk / price_risk) * price, cap)
+        value = max(self.min_notional, value)
         side = "buy" if sig["position_type"] == "long" else "sell"
         fill = self.fill_price(day_bars, t, side)
         shares = int(value / fill)
@@ -365,7 +376,7 @@ class Backtester:
             if self.pos and (not self.hold_overnight or i == len(days) - 1):
                 self.close(last_poll, day_bars, "eod_close" if not self.hold_overnight else "end_of_test")
             close_price = float(day_bars["close"].iloc[-1])
-            self.equity_rows.append({"date": day, "equity": round(self.equity(close_price), 2), "close": close_price, "trades": trades_today, "in_market": int(self.pos is not None or trades_today > 0)})
+            self.equity_rows.append({"date": day, "equity": round(self.equity(close_price), 2), "close": close_price, "trades": trades_today, "in_market": int(self.pos is not None or trades_today > 0), "exposure": round(self.exposure(close_price), 4)})
             if (i + 1) % 50 == 0:
                 print(f"  {i + 1}/{len(days)} days simulated", flush=True)
         return signal_counts
@@ -404,10 +415,14 @@ def report(bt, signal_counts):
     bh = (eq["close"].iloc[-1] / eq["close"].iloc[0] - 1) * 100
     print(f"Start equity        ${start_eq:,.2f}")
     print(f"End equity          ${end_eq:,.2f}")
+    bh_curve = eq["close"] / eq["close"].iloc[0]
+    bh_dd = ((bh_curve.cummax() - bh_curve) / bh_curve.cummax()).max() * 100
+    bh_rets = bh_curve.pct_change().dropna()
+    bh_sharpe = (bh_rets.mean() / bh_rets.std() * math.sqrt(252)) if bh_rets.std() > 0 else 0
     print(f"Total return        {total_ret:+.2f}%   (buy and hold {bh:+.2f}%)")
     print(f"CAGR                {cagr:+.2f}%")
-    print(f"Max drawdown        {max_dd:.2f}%")
-    print(f"Sharpe (daily)      {sharpe:.2f}")
+    print(f"Max drawdown        {max_dd:.2f}%   (buy and hold {bh_dd:.2f}%)")
+    print(f"Sharpe (daily)      {sharpe:.2f}   (buy and hold {bh_sharpe:.2f})")
     print()
     n = len(trades)
     if n == 0:
@@ -433,6 +448,7 @@ def report(bt, signal_counts):
         print(f"Longest loss streak {longest}")
         print(f"Avg hold            {trades['hold_minutes'].mean():.0f} min ({trades['hold_days'].mean():.1f} days)")
         print(f"Time in market      {eq['in_market'].mean() * 100:.1f}% of days")
+        print(f"Avg exposure        {eq['exposure'].mean() * 100:.1f}% of equity")
         print()
         print("Exit reasons:")
         for reason, count in trades["exit_reason"].value_counts().items():

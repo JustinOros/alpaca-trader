@@ -124,7 +124,9 @@ DEFAULT_CONFIG = {
     "OR_FVG_REQUIRE_VOLUME_CONFIRM": True,
     "EOD_CLOSE_MINUTES": 10,
     "HOLD_OVERNIGHT": False,
-    "EXIT_ON_TREND_FLIP": False
+    "EXIT_ON_TREND_FLIP": False,
+    "POSITION_SIZING": "risk",
+    "MAX_POSITION_PCT": 0.25
 }
 
 if not ENV_PATH.exists():
@@ -307,6 +309,14 @@ CROSSOVER_LOOKBACK = int(config.get("CROSSOVER_LOOKBACK", 5))
 EOD_CLOSE_MINUTES = int(config.get("EOD_CLOSE_MINUTES", 10))
 HOLD_OVERNIGHT = bool(config.get("HOLD_OVERNIGHT", False))
 EXIT_ON_TREND_FLIP = bool(config.get("EXIT_ON_TREND_FLIP", False))
+POSITION_SIZING = str(config.get("POSITION_SIZING", "risk")).lower()
+MAX_POSITION_PCT = float(config.get("MAX_POSITION_PCT", 0.25))
+if POSITION_SIZING not in ("risk", "fixed"):
+    logger.error(f"⚠️  Configuration error: POSITION_SIZING must be 'risk' or 'fixed', got '{POSITION_SIZING}'")
+    sys.exit(1)
+if not 0 < MAX_POSITION_PCT <= 1:
+    logger.error(f"⚠️  Configuration error: MAX_POSITION_PCT must be between 0 and 1, got {MAX_POSITION_PCT}")
+    sys.exit(1)
 STRATEGY_CONFIG = StrategyConfig(config)
 
 api = AlpacaClient(
@@ -910,18 +920,20 @@ def broker_entries_today(symbol):
         return 0
 
 def calculate_position_size(equity, stop_loss, current_price):
-    debug_print(f"Calculating position size: equity=${equity:.2f}, stop=${stop_loss:.2f}, price=${current_price:.2f}")
-    risk_amount = equity * RISK_PER_TRADE
-    price_risk = abs(current_price - stop_loss)
-    if price_risk == 0:
-        debug_print("Price risk is zero, returning MIN_NOTIONAL")
-        return MIN_NOTIONAL
-    shares = risk_amount / price_risk
-    position_value = shares * current_price
-    max_position = equity * 0.25
-    if position_value > max_position:
+    debug_print(f"Calculating position size: equity=${equity:.2f}, stop=${stop_loss:.2f}, price=${current_price:.2f}, mode={POSITION_SIZING}")
+    max_position = equity * MAX_POSITION_PCT
+    if POSITION_SIZING == "fixed":
         position_value = max_position
-        debug_print(f"Position capped at 25% equity: ${position_value:.2f}")
+    else:
+        risk_amount = equity * RISK_PER_TRADE
+        price_risk = abs(current_price - stop_loss)
+        if price_risk == 0:
+            debug_print("Price risk is zero, returning MIN_NOTIONAL")
+            return MIN_NOTIONAL
+        position_value = (risk_amount / price_risk) * current_price
+        if position_value > max_position:
+            position_value = max_position
+            debug_print(f"Position capped at {MAX_POSITION_PCT:.0%} equity: ${position_value:.2f}")
     if position_value < MIN_NOTIONAL:
         position_value = MIN_NOTIONAL
         debug_print(f"Position set to minimum: ${position_value:.2f}")

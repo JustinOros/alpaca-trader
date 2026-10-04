@@ -62,5 +62,7 @@
     "OR_FVG_REQUIRE_VOLUME_CONFIRM": true,
     "HOLD_OVERNIGHT": false,
     "EXIT_ON_TREND_FLIP": false,
-    "EOD_CLOSE_MINUTES": 10
+    "EOD_CLOSE_MINUTES": 10,
+    "POSITION_SIZING": "risk",
+    "MAX_POSITION_PCT": 0.25
 }

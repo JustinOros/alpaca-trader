@@ -195,6 +195,8 @@ MULTIFRAME_FILTER
 HOLD_OVERNIGHT       Keep positions open across sessions instead of closing before the bell
 EXIT_ON_TREND_FLIP   Exit when the short MA crosses back below the long MA on completed bars
 EOD_CLOSE_MINUTES    Minutes before close to stop polling and flatten (when not holding overnight)
+POSITION_SIZING      risk (size from RISK_PER_TRADE and stop distance) or fixed (always MAX_POSITION_PCT)
+MAX_POSITION_PCT     Largest position as a fraction of equity, 0 to 1 (default 0.25)
 PROFIT_TARGET_1/2    Set to 0 to disable scale out targets
 MAX_HOLD_TIME        Seconds, 0 disables
 ```
