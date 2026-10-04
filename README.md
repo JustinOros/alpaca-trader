@@ -200,12 +200,42 @@ COMMISSION_PCT
 
 ---
 
+## 🧪 Backtesting
+
+Replay the strategy in `config.json` over historical data before trading it:
+
+```bash
+python3 backtest.py
+python3 backtest.py --start 2023-01-01 --end 2026-09-30
+```
+
+Options:
+
+```
+--start / --end   Date range (default: last 3 years)
+--symbol          Override SYMBOL from config.json
+--capital         Starting equity (default 100000)
+--base            Bar size used to simulate polling (default 5Min)
+--feed            sip or iex (default sip)
+--data            Use a local CSV of bars instead of downloading
+```
+
+The backtester uses the same signal code as the live bot (`strategy.py`) and simulates polling at `POLL_INTERVAL`, scale outs, trailing stops, max hold time, end of day close, daily drawdown halt, and the daily trade limit. Fills use the next bar open plus `SLIPPAGE_PCT`, and `COMMISSION_PCT` is charged on both sides.
+
+Downloaded bars are cached in `alpaca_trader/backtest_cache/`. Results are written to `alpaca_trader/backtest_trades.csv` and `alpaca_trader/backtest_equity.csv`.
+
+Past results do not predict future results.
+
+---
+
 ## 🏗 Architecture
 
 ```
 alpaca_trader/
 ├── api.py           # Alpaca API interface
 ├── engine.py        # Core trading loop
+├── strategy.py      # Signal logic shared by live and backtest
+├── backtest.py      # Historical backtester
 ├── indicators.py    # Technical analysis
 ├── filters.py       # Market condition filters
 ├── risk.py          # Risk & position sizing
