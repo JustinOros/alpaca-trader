@@ -11,7 +11,7 @@ import pandas as pd
 import pytz
 
 from .indicators import atr
-from .strategy import StrategyConfig, evaluate_signal
+from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped
 
 EASTERN = pytz.timezone("US/Eastern")
 PKG_DIR = Path(__file__).parent
@@ -188,6 +188,8 @@ class Backtester:
         self.comm = float(config.get("COMMISSION_PCT", 0.0))
         self.min_notional = float(config.get("MIN_NOTIONAL", 1.0))
         self.use_200 = bool(config.get("USE_200_SMA_FILTER", False))
+        self.hold_overnight = bool(config.get("HOLD_OVERNIGHT", False))
+        self.exit_on_flip = bool(config.get("EXIT_ON_TREND_FLIP", False))
         self.cash = capital
         self.pos = None
         self.trades = []
@@ -266,6 +268,7 @@ class Backtester:
             "pnl_dollars": round(p["realized"], 2),
             "pnl_percent": round(p["realized"] / (p["entry"] * p["initial_shares"]) * 100, 4),
             "hold_minutes": round((t - p["entry_time"]).total_seconds() / 60, 1),
+            "hold_days": (t.date() - p["entry_time"].date()).days,
             "exit_reason": reason,
             "scaled_out": p["t1_hit"],
             "entry_reason": p["reason_in"],
@@ -286,12 +289,12 @@ class Backtester:
         else:
             profit_pct = (p["entry"] - price) / p["entry"] * 100
         risk_pct = abs(p["entry"] - p["stop"]) / p["entry"] * 100
-        if profit_pct >= risk_pct * self.pt1 and not p["t1_hit"]:
+        if self.pt1 > 0 and profit_pct >= risk_pct * self.pt1 and not p["t1_hit"]:
             half = int(p["shares"] / 2)
             if half > 0:
                 self.reduce(half, t, day_bars)
             p["t1_hit"] = True
-        if profit_pct >= risk_pct * self.pt2:
+        if self.pt2 > 0 and profit_pct >= risk_pct * self.pt2:
             self.close(t, day_bars, "target_2_hit")
             return True
         if not self.trailing:
@@ -307,6 +310,9 @@ class Backtester:
             hit = price <= p["trail"] if p["type"] == "long" else price >= p["trail"]
         if hit:
             self.close(t, day_bars, "stop_hit")
+            return True
+        if self.exit_on_flip and trend_flipped(completed_bars(bars, self.signal_tf, t), self.cfg, p["type"]):
+            self.close(t, day_bars, "trend_flip")
             return True
         return False
 
@@ -346,7 +352,8 @@ class Backtester:
                     daily = None
                     if self.use_200:
                         daily = self.builder.daily_with_partial(day, t).tail(210)
-                    sig = evaluate_signal(bars, self.cfg, daily=daily)
+                    sig_bars = completed_bars(bars, self.signal_tf, t) if self.hold_overnight else bars
+                    sig = evaluate_signal(sig_bars, self.cfg, daily=daily, bars_completed=self.hold_overnight)
                     key = sig["signal"] or sig["reason"].split(" ")[0]
                     signal_counts[key] = signal_counts.get(key, 0) + 1
                     if sig["signal"] == "sell" and not self.shorts:
@@ -355,10 +362,10 @@ class Backtester:
                         if self.open_position(sig, price, t, self.equity(price), day_bars):
                             trades_today += 1
                 t += pd.Timedelta(seconds=self.poll)
-            if self.pos:
-                self.close(last_poll, day_bars, "eod_close")
+            if self.pos and (not self.hold_overnight or i == len(days) - 1):
+                self.close(last_poll, day_bars, "eod_close" if not self.hold_overnight else "end_of_test")
             close_price = float(day_bars["close"].iloc[-1])
-            self.equity_rows.append({"date": day, "equity": round(self.equity(close_price), 2), "close": close_price, "trades": trades_today})
+            self.equity_rows.append({"date": day, "equity": round(self.equity(close_price), 2), "close": close_price, "trades": trades_today, "in_market": int(self.pos is not None or trades_today > 0)})
             if (i + 1) % 50 == 0:
                 print(f"  {i + 1}/{len(days)} days simulated", flush=True)
         return signal_counts
@@ -424,7 +431,8 @@ def report(bt, signal_counts):
         print(f"Profit factor       {pf:.2f}")
         print(f"Best / worst        ${trades['pnl_dollars'].max():,.2f} / ${trades['pnl_dollars'].min():,.2f}")
         print(f"Longest loss streak {longest}")
-        print(f"Avg hold            {trades['hold_minutes'].mean():.0f} min")
+        print(f"Avg hold            {trades['hold_minutes'].mean():.0f} min ({trades['hold_days'].mean():.1f} days)")
+        print(f"Time in market      {eq['in_market'].mean() * 100:.1f}% of days")
         print()
         print("Exit reasons:")
         for reason, count in trades["exit_reason"].value_counts().items():
@@ -449,9 +457,19 @@ def main(argv=None):
     parser.add_argument("--base", default="5Min", help="Execution bar size used to simulate intraday polling")
     parser.add_argument("--feed", default="sip", choices=["sip", "iex"])
     parser.add_argument("--data", default=None, help="Use a local CSV of base bars instead of downloading")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override a config.json value for this run, repeatable")
     args = parser.parse_args(argv)
 
     config = load_config()
+    for item in args.set:
+        if "=" not in item:
+            sys.exit(f"--set expects KEY=VALUE, got {item}")
+        key, value = item.split("=", 1)
+        try:
+            config[key] = json.loads(value)
+        except json.JSONDecodeError:
+            config[key] = value
+        print(f"Override {key} = {config[key]}")
     if config.get("STRATEGY_MODE") == "or_fvg" or config.get("OR_FVG_ENABLED"):
         sys.exit("OR-FVG mode is not supported by the backtester yet")
     symbol = args.symbol or config.get("SYMBOL", "SPY")

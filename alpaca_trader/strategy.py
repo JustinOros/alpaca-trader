@@ -1,7 +1,25 @@
 import math
+from datetime import timedelta
 import pandas as pd
 from .indicators import sma, ema, rsi, adx, atr, bollinger
 from .filters import check_volume, check_candle_pattern, check_macd_confirmation, detect_market_regime
+
+
+def timeframe_delta(timeframe):
+    tf = str(timeframe).lower()
+    for suffix, unit in (("min", "minutes"), ("hour", "hours"), ("day", "days"), ("week", "weeks")):
+        if tf.endswith(suffix):
+            num = tf[: -len(suffix)]
+            return timedelta(**{unit: int(num) if num.isdigit() else 1})
+    raise ValueError(f"Unsupported timeframe: {timeframe}")
+
+
+def completed_bars(bars, timeframe, now):
+    if bars is None or len(bars) == 0:
+        return bars
+    delta = timeframe_delta(timeframe)
+    ends = bars.index + delta
+    return bars[ends <= now]
 
 
 class StrategyConfig:
@@ -73,7 +91,17 @@ def _result(signal=None, strength=0.0, stop=0.0, position_type=None, reason="", 
     return out
 
 
-def evaluate_signal(bars, cfg, daily=None, vix=0.0):
+def trend_flipped(bars, cfg, position_type):
+    if bars is None or len(bars) < cfg.long_window:
+        return False
+    short_ma = float(_ma(bars["close"], cfg.short_window, cfg.use_ema).iloc[-1])
+    long_ma = float(_ma(bars["close"], cfg.long_window, cfg.use_ema).iloc[-1])
+    if position_type == "long":
+        return short_ma < long_ma
+    return short_ma > long_ma
+
+
+def evaluate_signal(bars, cfg, daily=None, vix=0.0, bars_completed=False):
     if bars is None or len(bars) < cfg.long_window:
         return _result(reason="insufficient_data")
 
@@ -105,7 +133,8 @@ def evaluate_signal(bars, cfg, daily=None, vix=0.0):
     if cfg.use_vix_filter and vix > cfg.vix_threshold:
         return _result(reason=f"vix_filter {vix:.1f}>{cfg.vix_threshold}", **metrics)
 
-    if not check_volume(bars.iloc[:-1], cfg.volume_multiplier):
+    volume_bars = bars if bars_completed else bars.iloc[:-1]
+    if not check_volume(volume_bars, cfg.volume_multiplier):
         return _result(reason="volume_filter", **metrics)
 
     if cfg.use_200_sma_filter and not above_200_sma(daily):

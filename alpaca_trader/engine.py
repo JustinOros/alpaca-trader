@@ -14,6 +14,7 @@ from .api import AlpacaClient
 from .indicators import sma, ema, rsi, atr, adx, macd, bollinger
 from .filters import check_volume, check_candle_pattern, check_macd_confirmation, check_200_sma_filter, detect_market_regime, get_vix
 from .filters import check_multiframe_confluence
+from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped
 from .utils import EASTERN, seconds_to_human_readable
 
 BARS_FOR_200_SMA = 210
@@ -36,6 +37,7 @@ SIGNALS_PATH = SCRIPT_DIR / "signals.csv"
 PERFORMANCE_PATH = SCRIPT_DIR / "performance.csv"
 INDICATORS_PATH = SCRIPT_DIR / "indicators.csv"
 PDT_TRACKER_PATH = SCRIPT_DIR / "pdt_tracker.csv"
+POSITION_STATE_PATH = SCRIPT_DIR / "position_state.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -120,7 +122,9 @@ DEFAULT_CONFIG = {
     "OR_FVG_RISK_REWARD_RATIO": 2.0,
     "OR_FVG_MAX_ENTRY_TIME": "10:30",
     "OR_FVG_REQUIRE_VOLUME_CONFIRM": True,
-    "EOD_CLOSE_MINUTES": 10
+    "EOD_CLOSE_MINUTES": 10,
+    "HOLD_OVERNIGHT": False,
+    "EXIT_ON_TREND_FLIP": False
 }
 
 if not ENV_PATH.exists():
@@ -301,6 +305,9 @@ RSI_RANGE_OVERBOUGHT = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
 REQUIRE_MA_CROSSOVER = bool(config.get("REQUIRE_MA_CROSSOVER", True))
 CROSSOVER_LOOKBACK = int(config.get("CROSSOVER_LOOKBACK", 5))
 EOD_CLOSE_MINUTES = int(config.get("EOD_CLOSE_MINUTES", 10))
+HOLD_OVERNIGHT = bool(config.get("HOLD_OVERNIGHT", False))
+EXIT_ON_TREND_FLIP = bool(config.get("EXIT_ON_TREND_FLIP", False))
+STRATEGY_CONFIG = StrategyConfig(config)
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -503,6 +510,30 @@ def load_session_state():
     except Exception as e:
         debug_print(f"Failed to load session state: {e}")
         return None
+
+def save_position_state(state):
+    try:
+        with open(POSITION_STATE_PATH, "w") as f:
+            json.dump(state, f, indent=2, default=str)
+    except Exception as e:
+        debug_print(f"Failed to save position state: {e}")
+
+def load_position_state():
+    try:
+        if not POSITION_STATE_PATH.exists():
+            return None
+        with open(POSITION_STATE_PATH) as f:
+            return json.load(f)
+    except Exception as e:
+        debug_print(f"Failed to load position state: {e}")
+        return None
+
+def clear_position_state():
+    try:
+        if POSITION_STATE_PATH.exists():
+            POSITION_STATE_PATH.unlink()
+    except Exception as e:
+        debug_print(f"Failed to clear position state: {e}")
 
 def log_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, shares, position_value, stop_loss, target_1, target_2, pnl_dollars, pnl_percent, hold_minutes, exit_reason, regime, signal_strength, rsi, adx, ma_spread, slippage):
     try:
@@ -1082,162 +1113,30 @@ def or_fvg_signal_generator(symbol):
 def advanced_signal_generator(symbol):
     debug_print(f"Generating signal for {symbol}")
     bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
+    if HOLD_OVERNIGHT and bars is not None:
+        bars = completed_bars(bars, BAR_TIMEFRAME, datetime.now(EASTERN))
     if bars is None or len(bars) < LONG_WINDOW:
         debug_print("Insufficient data for signal generation")
         return None, 0, 0, None
     
-    closes = bars['close']
-    highs = bars['high']
-    lows = bars['low']
-    current_price = closes.iloc[-1]
-    
-    debug_print("Calculating indicators...")
-    if USE_EMA:
-        short_ma_series = ema(closes, SHORT_WINDOW)
-        long_ma_series = ema(closes, LONG_WINDOW)
-        short_ma = short_ma_series.iloc[-1]
-        long_ma = long_ma_series.iloc[-1]
-    else:
-        short_ma_series = sma(closes, SHORT_WINDOW)
-        long_ma_series = sma(closes, LONG_WINDOW)
-        short_ma = short_ma_series.iloc[-1]
-        long_ma = long_ma_series.iloc[-1]
-    
-    bullish_crossover = False
-    bearish_crossover = False
-    
-    if REQUIRE_MA_CROSSOVER and len(bars) >= LONG_WINDOW + CROSSOVER_LOOKBACK:
-        current_bar_index = len(bars) - 1
-        
-        for i in range(1, CROSSOVER_LOOKBACK + 1):
-            bar_index = current_bar_index - i
-            if bar_index >= 1 and bar_index < len(bars) and (bar_index + 1) < len(bars):
-                idx_current = len(short_ma_series) - i
-                idx_prev = len(short_ma_series) - i - 1
-                if idx_prev >= 0 and idx_current < len(short_ma_series):
-                    if short_ma_series.iloc[idx_prev] <= long_ma_series.iloc[idx_prev] and short_ma_series.iloc[idx_current] > long_ma_series.iloc[idx_current]:
-                        if bar_index > signal_state.last_bullish_crossover_bar:
-                            bullish_crossover = True
-                            signal_state.last_bullish_crossover_bar = bar_index
-                            debug_print(f"Bullish crossover detected {i} bars ago")
-                        break
-        
-        for i in range(1, CROSSOVER_LOOKBACK + 1):
-            bar_index = current_bar_index - i
-            if bar_index >= 1 and bar_index < len(bars) and (bar_index + 1) < len(bars):
-                idx_current = len(short_ma_series) - i
-                idx_prev = len(short_ma_series) - i - 1
-                if idx_prev >= 0 and idx_current < len(short_ma_series):
-                    if short_ma_series.iloc[idx_prev] >= long_ma_series.iloc[idx_prev] and short_ma_series.iloc[idx_current] < long_ma_series.iloc[idx_current]:
-                        if bar_index > signal_state.last_bearish_crossover_bar:
-                            bearish_crossover = True
-                            signal_state.last_bearish_crossover_bar = bar_index
-                            debug_print(f"Bearish crossover detected {i} bars ago")
-                        break
-    
-    rsi_val = rsi(closes, 14).iloc[-1]
-    adx_val = adx(highs, lows, closes).iloc[-1]
-    atr_val = atr(highs, lows, closes).iloc[-1]
-    upper, middle, lower = bollinger(closes, BB_WINDOW, BB_STD)
-    
-    debug_print(f"Indicators: MA_short={short_ma:.2f}, MA_long={long_ma:.2f}, RSI={rsi_val:.1f}, ADX={adx_val:.1f}")
+    daily = None
+    if USE_200_SMA_FILTER:
+        try:
+            daily = api.get_latest_bars(symbol, "1Day", BARS_FOR_200_SMA)
+        except Exception as e:
+            debug_print(f"Daily bars for 200 SMA unavailable: {e}")
     
     vix_level = get_vix(api, SYMBOL, USE_VIX_FILTER)
-    if USE_VIX_FILTER and vix_level > VIX_THRESHOLD:
-        debug_print(f"VIX filter triggered: {vix_level:.1f} > {VIX_THRESHOLD}")
+    result = evaluate_signal(bars, STRATEGY_CONFIG, daily=daily, vix=vix_level, bars_completed=HOLD_OVERNIGHT)
+    
+    debug_print(f"Indicators: price={result['price']:.2f}, RSI={result['rsi']:.1f}, ADX={result['adx']:.1f}, ATR={result['atr']:.2f}, spread={result['ma_spread']:.2f}, regime={result['regime']}")
+    
+    if result["signal"] is None:
+        debug_print(f"No signal: {result['reason']}")
         return None, 0, 0, None
     
-    completed_bars = bars.iloc[:-1]
-    if not check_volume(completed_bars, VOLUME_MULTIPLIER):
-        if len(completed_bars) >= 20 and "volume" in completed_bars.columns:
-            avg_vol = completed_bars["volume"].rolling(window=20).mean().iloc[-1]
-            cur_vol = completed_bars["volume"].iloc[-1]
-            debug_print(f"Volume filter failed: current={cur_vol:,.0f}, avg={avg_vol:,.0f}, required={avg_vol*VOLUME_MULTIPLIER:,.0f} ({VOLUME_MULTIPLIER}x)")
-        else:
-            debug_print("Volume filter failed: insufficient data")
-        return None, 0, 0, None
-    
-    if USE_200_SMA_FILTER:
-        sma_200_pass = check_200_sma_filter(symbol, api)
-        if not sma_200_pass:
-            debug_print("200 SMA filter failed: price below 200 SMA")
-            return None, 0, 0, None
-    
-    bullish_pattern, bearish_pattern = check_candle_pattern(bars)
-    macd_signal = check_macd_confirmation(bars)
-    multiframe_trend = check_multiframe_confluence(SYMBOL, USE_EMA, api) if MULTIFRAME_FILTER else "neutral"
-    regime = detect_market_regime(bars, ADX_THRESHOLD) if REGIME_DETECTION else "trend"
-    
-    debug_print(f"Filters: regime={regime}, multiframe={multiframe_trend}, macd={macd_signal}")
-    
-    signal = None
-    strength = 0
-    stop = 0
-    position_type = None
-    
-    effective_regime = regime
-    if regime in ("high_vol", "low_vol"):
-        effective_regime = "trend"
-    
-    if effective_regime == "trend":
-        if short_ma > long_ma and rsi_val < RSI_BUY_MAX:
-            if REQUIRE_MA_CROSSOVER and not bullish_crossover:
-                debug_print("Bullish signal rejected: no recent crossover")
-            elif REQUIRE_CANDLE_PATTERN and not bullish_pattern:
-                debug_print("Bullish signal rejected: candle pattern required")
-            elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bullish":
-                debug_print("Bullish signal rejected: MACD confirmation required")
-            else:
-                signal = "buy"
-                strength = min(1.0, (adx_val / 40) * 0.7 + 0.3)
-                stop = current_price - atr_val * ATR_STOP_MULTIPLIER
-                position_type = "long"
-                debug_print(f"BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
-        
-        elif short_ma < long_ma and rsi_val > RSI_SELL_MIN and rsi_val < RSI_SELL_MAX:
-            if REQUIRE_MA_CROSSOVER and not bearish_crossover:
-                debug_print("Bearish signal rejected: no recent crossover")
-            elif REQUIRE_CANDLE_PATTERN and not bearish_pattern:
-                debug_print("Bearish signal rejected: candle pattern required")
-            elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bearish":
-                debug_print("Bearish signal rejected: MACD confirmation required")
-            else:
-                signal = "sell"
-                strength = min(1.0, (adx_val / 40) * 0.7 + 0.3)
-                stop = current_price + atr_val * ATR_STOP_MULTIPLIER
-                position_type = "short"
-                debug_print(f"SELL signal: strength={strength:.2f}, stop=${stop:.2f}")
-    
-    elif effective_regime == "range":
-        if current_price <= lower.iloc[-1] and rsi_val < RSI_RANGE_OVERSOLD:
-            if REQUIRE_CANDLE_PATTERN and not bullish_pattern:
-                debug_print("Range buy rejected: candle pattern required")
-            elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bullish":
-                debug_print("Range buy rejected: MACD confirmation required")
-            else:
-                signal = "buy"
-                strength = 0.85
-                stop = current_price - atr_val * ATR_STOP_MULTIPLIER
-                position_type = "long"
-                debug_print(f"Range BUY signal: strength={strength:.2f}, stop=${stop:.2f}")
-        
-        elif current_price >= upper.iloc[-1] and rsi_val > RSI_RANGE_OVERBOUGHT:
-            if REQUIRE_CANDLE_PATTERN and not bearish_pattern:
-                debug_print("Range sell rejected: candle pattern required")
-            elif REQUIRE_MACD_CONFIRMATION and macd_signal != "bearish":
-                debug_print("Range sell rejected: MACD confirmation required")
-            else:
-                signal = "sell"
-                strength = 0.85
-                stop = current_price + atr_val * ATR_STOP_MULTIPLIER
-                position_type = "short"
-                debug_print(f"Range SELL signal: strength={strength:.2f}, stop=${stop:.2f}")
-    
-    if strength < MIN_SIGNAL_STRENGTH:
-        debug_print(f"Signal rejected: strength {strength:.2f} < {MIN_SIGNAL_STRENGTH}")
-        return None, 0, 0, None
-    
-    return signal, strength, stop, position_type
+    debug_print(f"{result['signal'].upper()} signal ({result['reason']}): strength={result['strength']:.2f}, stop=${result['stop']:.2f}")
+    return result["signal"], result["strength"], result["stop"], result["position_type"]
 
 def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, position_type):
     debug_print(f"Checking scale out: entry=${entry_price:.2f}, current=${current_price:.2f}")
@@ -1273,7 +1172,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
     target_1_pct = risk_pct * PROFIT_TARGET_1
     target_2_pct = risk_pct * PROFIT_TARGET_2
     
-    if profit_pct >= target_1_pct and not position_state.target_1_hit:
+    if PROFIT_TARGET_1 > 0 and profit_pct >= target_1_pct and not position_state.target_1_hit:
         qty = current_position_qty(symbol)
         if qty != 0:
             half_qty = int(qty / 2)
@@ -1292,7 +1191,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
                 logger.info(f"💰  Target 1 reached @ {profit_pct:.2f}% (position too small to scale)")
                 debug_print(f"Position size {qty} too small for partial exit, holding for target 2")
     
-    if profit_pct >= target_2_pct:
+    if PROFIT_TARGET_2 > 0 and profit_pct >= target_2_pct:
         qty = current_position_qty(symbol)
         if qty != 0:
             debug_print(f"Target 2 hit ({target_2_pct:.2f}%), closing remaining {qty} shares")
@@ -1350,6 +1249,18 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
             return True
     
     return False
+
+def check_exit_reason(symbol, entry_price, current_price, initial_stop, position_type):
+    if atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, position_type):
+        return 'stop_hit'
+    if EXIT_ON_TREND_FLIP:
+        bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
+        if bars is not None:
+            closed = completed_bars(bars, BAR_TIMEFRAME, datetime.now(EASTERN))
+            if trend_flipped(closed, STRATEGY_CONFIG, position_type):
+                debug_print("Trend flipped against position on completed bars")
+                return 'trend_flip'
+    return None
 
 def main():
     logger.info("🚀  Trading engine starting...")
@@ -1466,6 +1377,23 @@ def main():
                         
                         if USE_TRAILING_STOP:
                             position_state.trailing_stop = stop_loss
+                        
+                        saved = load_position_state()
+                        if saved and saved.get('symbol') == SYMBOL and saved.get('position_type') == position_type:
+                            try:
+                                entry_time = datetime.fromisoformat(saved['entry_time'])
+                                stop_loss = float(saved['stop_loss'])
+                                position_state.target_1_hit = bool(saved.get('target_1_hit', False))
+                                if saved.get('trailing_stop') is not None:
+                                    position_state.trailing_stop = float(saved['trailing_stop'])
+                                entry_strength = float(saved.get('entry_strength', 0))
+                                entry_rsi = float(saved.get('entry_rsi', 0))
+                                entry_adx = float(saved.get('entry_adx', 0))
+                                entry_ma_spread = float(saved.get('entry_ma_spread', 0))
+                                entry_regime = saved.get('entry_regime', 'unknown')
+                                logger.info(f"🔄  Restored saved state: entered {entry_time:%Y-%m-%d %H:%M}, stop=${stop_loss:.2f}, trailing=${position_state.trailing_stop or stop_loss:.2f}")
+                            except Exception as e:
+                                debug_print(f"Saved position state unusable: {e}")
                 except Exception as e:
                     logger.info("🔎  No open positions found")
                     debug_logger.debug(f"Position check exception: {e}")
@@ -1709,7 +1637,7 @@ def main():
                                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                     time.sleep(poll_sleep_seconds(clock))
                                     continue
-                        elif atr_based_trailing_stop(SYMBOL, entry_price, current_price, stop_loss, position_type):
+                        elif (exit_reason := check_exit_reason(SYMBOL, entry_price, current_price, stop_loss, position_type)):
                             qty = current_position_qty(SYMBOL)
                             if qty != 0:
                                 exit_time = datetime.now(EASTERN)
@@ -1753,7 +1681,7 @@ def main():
                                     pnl_dollars,
                                     pnl_percent,
                                     hold_minutes,
-                                    'stop_hit',
+                                    exit_reason,
                                     entry_regime,
                                     entry_strength,
                                     entry_rsi,
@@ -1763,8 +1691,8 @@ def main():
                                 )
                                 
                                 position_active = False
-                                logger.info("🛑  Stop hit")
-                                debug_print("Stop hit, position closed")
+                                logger.info(f"🛑  Exit: {exit_reason}")
+                                debug_print(f"Position closed: {exit_reason}")
                                 position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                 time.sleep(poll_sleep_seconds(clock))
@@ -1941,6 +1869,24 @@ def main():
                             )
                             last_indicator_log = now
                     
+                    if position_active:
+                        save_position_state({
+                            'symbol': SYMBOL,
+                            'position_type': position_type,
+                            'entry_price': entry_price,
+                            'entry_time': entry_time.isoformat() if entry_time else None,
+                            'stop_loss': stop_loss,
+                            'trailing_stop': position_state.trailing_stop,
+                            'target_1_hit': position_state.target_1_hit,
+                            'entry_strength': entry_strength,
+                            'entry_rsi': entry_rsi,
+                            'entry_adx': entry_adx,
+                            'entry_ma_spread': entry_ma_spread,
+                            'entry_regime': entry_regime
+                        })
+                    else:
+                        clear_position_state()
+                    
                     save_session_state(
                         trades_today,
                         opening_equity,
@@ -1953,9 +1899,10 @@ def main():
                     time.sleep(poll_sleep_seconds(clock))
                 
                 logger.info("🔚  Session ending...")
-                debug_print("Session ending, closing all positions...")
                 
-                if position_active and entry_time:
+                if HOLD_OVERNIGHT and position_active:
+                    logger.info(f"🌙  HOLD_OVERNIGHT on, keeping {position_type.upper()} {SYMBOL} position open")
+                elif position_active and entry_time:
                     exit_time = datetime.now(EASTERN)
                     hold_minutes = (exit_time - entry_time).total_seconds() / 60
                     qty = current_position_qty(SYMBOL)
@@ -2009,7 +1956,9 @@ def main():
                             0
                         )
                 
-                close_symbol_position(SYMBOL)
+                if not HOLD_OVERNIGHT:
+                    close_symbol_position(SYMBOL)
+                    clear_position_state()
                 
                 final_equity = fetch_equity()
                 session_pnl = final_equity - opening_equity
@@ -2083,7 +2032,10 @@ def main():
     except KeyboardInterrupt:
         logger.info("🛑  User interrupt")
         debug_print("User interrupt detected")
-        close_symbol_position(SYMBOL)
+        if HOLD_OVERNIGHT:
+            logger.info(f"🌙  HOLD_OVERNIGHT on, leaving any {SYMBOL} position open. It will be recovered on restart.")
+        else:
+            close_symbol_position(SYMBOL)
     except Exception as e:
         logger.error(f"💥  Fatal error: {e}")
         debug_print(f"Fatal error: {e}")

@@ -189,6 +189,18 @@ USE_VIX_FILTER
 MULTIFRAME_FILTER
 ```
 
+### Holding
+
+```
+HOLD_OVERNIGHT       Keep positions open across sessions instead of closing before the bell
+EXIT_ON_TREND_FLIP   Exit when the short MA crosses back below the long MA on completed bars
+EOD_CLOSE_MINUTES    Minutes before close to stop polling and flatten (when not holding overnight)
+PROFIT_TARGET_1/2    Set to 0 to disable scale out targets
+MAX_HOLD_TIME        Seconds, 0 disables
+```
+
+With HOLD_OVERNIGHT on, entries and trend flips are evaluated on completed bars only, and position details are saved to `alpaca_trader/position_state.json` so a restart restores the stop and entry time.
+
 ### Execution
 
 ```
@@ -218,7 +230,16 @@ Options:
 --base            Bar size used to simulate polling (default 5Min)
 --feed            sip or iex (default sip)
 --data            Use a local CSV of bars instead of downloading
+--set KEY=VALUE   Override a config.json value for this run (repeatable)
 ```
+
+Test the overnight trend mode without editing config.json:
+
+```bash
+python3 backtest.py --start 2018-01-01 --end 2022-12-31 --set HOLD_OVERNIGHT=true --set EXIT_ON_TREND_FLIP=true --set PROFIT_TARGET_1=0 --set PROFIT_TARGET_2=0 --set MAX_HOLD_TIME=0
+```
+
+Tune on one period, then confirm on a later period you did not tune on.
 
 The backtester uses the same signal code as the live bot (`strategy.py`) and simulates polling at `POLL_INTERVAL`, scale outs, trailing stops, max hold time, end of day close, daily drawdown halt, and the daily trade limit. Fills use the next bar open plus `SLIPPAGE_PCT`, and `COMMISSION_PCT` is charged on both sides.
 
