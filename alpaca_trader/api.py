@@ -14,6 +14,9 @@ BARS_REQUEST_TIMEOUT = 30
 _RETRYABLE_ERRORS = (tradeapi.rest.APIError, ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.Timeout, TimeoutError)
 
 
+_TERMINAL_ORDER_STATES = {"filled", "canceled", "cancelled", "expired", "rejected"}
+
+
 def _timeframe_minutes(timeframe):
     tf = str(timeframe).lower()
     for suffix, mult in (("min", 1), ("hour", 60), ("day", 390), ("week", 1950), ("month", 8190)):
@@ -103,6 +106,28 @@ class AlpacaClient:
     def close_position(self, symbol):
         return self.api.close_position(symbol)
     
+    def wait_for_fill(self, order_id, timeout):
+        start = time.time()
+        status = self.get_order(order_id)
+        while status.status not in _TERMINAL_ORDER_STATES:
+            if time.time() - start > timeout:
+                try:
+                    self.cancel_order(order_id)
+                except Exception as e:
+                    logging.warning(f"Cancel after timeout failed for {order_id}: {e}")
+                time.sleep(1)
+                status = self.get_order(order_id)
+                break
+            time.sleep(0.5)
+            status = self.get_order(order_id)
+        filled_qty = float(getattr(status, "filled_qty", 0) or 0)
+        avg_price = getattr(status, "filled_avg_price", None)
+        if filled_qty > 0 and avg_price:
+            if status.status != "filled":
+                logging.warning(f"Order {order_id} partially filled: {filled_qty} shares, status={status.status}")
+            return float(avg_price)
+        return None
+
     def place_order(self, symbol, side, notional, limit_price, limit_order_timeout):
         try:
             quote = self.get_latest_quote(symbol)
@@ -127,28 +152,9 @@ class AlpacaClient:
                 return None
             if limit_price:
                 order = self.submit_order(symbol=symbol, qty=shares, side=side, type="limit", limit_price=round(limit_price, 2), time_in_force="day")
-                start = time.time()
-                while time.time() - start < limit_order_timeout:
-                    status = self.get_order(order.id)
-                    if status.status == "filled":
-                        return float(status.filled_avg_price)
-                    if status.status in {"cancelled", "expired", "rejected"}:
-                        return None
-                    time.sleep(2)
-                self.cancel_order(order.id)
-                return None
+                return self.wait_for_fill(order.id, limit_order_timeout)
             order = self.submit_order(symbol=symbol, qty=shares, side=side, type="market", time_in_force="day")
-            status = self.get_order(order.id)
-            timeout = 30
-            start_time = time.time()
-            while status.status not in {"filled", "cancelled", "expired", "rejected"}:
-                if time.time() - start_time > timeout:
-                    return None
-                time.sleep(0.5)
-                status = self.get_order(order.id)
-            if status.status == "filled":
-                return float(status.filled_avg_price)
-            return None
+            return self.wait_for_fill(order.id, 30)
         except Exception as e:
             logging.error(f"Order placement error: {e}")
             return None

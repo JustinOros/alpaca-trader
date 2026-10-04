@@ -119,7 +119,8 @@ DEFAULT_CONFIG = {
     "OR_FVG_MIN_GAP_SIZE": 0.05,
     "OR_FVG_RISK_REWARD_RATIO": 2.0,
     "OR_FVG_MAX_ENTRY_TIME": "10:30",
-    "OR_FVG_REQUIRE_VOLUME_CONFIRM": True
+    "OR_FVG_REQUIRE_VOLUME_CONFIRM": True,
+    "EOD_CLOSE_MINUTES": 10
 }
 
 if not ENV_PATH.exists():
@@ -299,6 +300,7 @@ RSI_RANGE_OVERSOLD = float(config.get("RSI_RANGE_OVERSOLD", 30))
 RSI_RANGE_OVERBOUGHT = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
 REQUIRE_MA_CROSSOVER = bool(config.get("REQUIRE_MA_CROSSOVER", True))
 CROSSOVER_LOOKBACK = int(config.get("CROSSOVER_LOOKBACK", 5))
+EOD_CLOSE_MINUTES = int(config.get("EOD_CLOSE_MINUTES", 10))
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -403,9 +405,9 @@ class PDTTracker:
 
     def sync_from_broker(self, broker_count):
         today = datetime.now(EASTERN).date()
-        today_count = sum(1 for d in self.trade_dates if d == today)
-        if broker_count > today_count:
-            for _ in range(broker_count - today_count):
+        known_count = self.rolling_count()
+        if broker_count > known_count:
+            for _ in range(broker_count - known_count):
                 self.trade_dates.append(today)
             self._save()
             debug_logger.debug(f"PDT synced from broker: {broker_count} trades today, rolling count now {self.rolling_count()}/{self.PDT_LIMIT}")
@@ -432,7 +434,7 @@ class PositionState:
 signal_state = SignalState()
 position_state = PositionState()
 
-if PDT_RULE:
+if PDT_RULE and equity < 25000:
     _startup_pdt = PDTTracker()
     _startup_pdt.sync_from_broker(daytrade_count)
     logger.info(f"    PDT Rule Enforcement: ON ({_startup_pdt.rolling_count()}/3 trades used, {_startup_pdt.remaining()} remaining this window)")
@@ -534,7 +536,7 @@ def log_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, shar
             existing = pd.read_csv(TRADES_PATH)
             df = pd.concat([existing, df], ignore_index=True)
             cutoff_date = datetime.now(EASTERN) - timedelta(days=90)
-            df['entry_time'] = pd.to_datetime(df['entry_time'], format='ISO8601')
+            df['entry_time'] = pd.to_datetime(df['entry_time'], format='ISO8601', utc=True)
             df = df[df['entry_time'] > cutoff_date]
         
         df.to_csv(TRADES_PATH, index=False)
@@ -753,20 +755,13 @@ def submit_market_sell(symbol, qty):
             debug_print(f"Invalid quantity: {shares}")
             return None
         order = api.submit_order(symbol=symbol, qty=shares, side="sell", type="market", time_in_force="day")
-        status = api.get_order(order.id)
-        timeout = 30
-        start_time = time.time()
-        while status.status not in {"filled", "cancelled", "expired", "rejected"}:
-            if time.time() - start_time > timeout:
-                debug_print("Order status check timeout")
-                return None
-            time.sleep(0.5)
-            status = api.get_order(order.id)
-        if status.status == "filled":
-            price = float(status.filled_avg_price)
-            logger.info(f"🔴  SELL {symbol} @ ${price:.2f}")
-            debug_print(f"Sell order filled @ ${price:.2f}")
-            return price
+        price = api.wait_for_fill(order.id, 30)
+        if price is None:
+            debug_print("Order not filled within timeout, canceled")
+            return None
+        logger.info(f"🔴  SELL {symbol} @ ${price:.2f}")
+        debug_print(f"Order filled @ ${price:.2f}")
+        return price
     except Exception as e:
         logger.error(f"Sell order failed: {e}")
         debug_print(f"Sell order failed: {e}")
@@ -854,24 +849,34 @@ def submit_buy_to_cover(symbol, qty):
             debug_print(f"Invalid quantity: {shares}")
             return None
         order = api.submit_order(symbol=symbol, qty=shares, side="buy", type="market", time_in_force="day")
-        status = api.get_order(order.id)
-        timeout = 30
-        start_time = time.time()
-        while status.status not in {"filled", "cancelled", "expired", "rejected"}:
-            if time.time() - start_time > timeout:
-                debug_print("Order status check timeout")
-                return None
-            time.sleep(0.5)
-            status = api.get_order(order.id)
-        if status.status == "filled":
-            price = float(status.filled_avg_price)
-            logger.info(f"🟢  COVER {symbol} @ ${price:.2f}")
-            debug_print(f"Buy to cover filled @ ${price:.2f}")
-            return price
+        price = api.wait_for_fill(order.id, 30)
+        if price is None:
+            debug_print("Order not filled within timeout, canceled")
+            return None
+        logger.info(f"🟢  COVER {symbol} @ ${price:.2f}")
+        debug_print(f"Order filled @ ${price:.2f}")
+        return price
     except Exception as e:
         logger.error(f"Buy to cover failed: {e}")
         debug_print(f"Buy to cover failed: {e}")
         return None
+
+def poll_sleep_seconds(clock):
+    try:
+        until_eod = (clock.next_close - clock.timestamp).total_seconds() - EOD_CLOSE_MINUTES * 60
+        return max(5, min(POLL_INTERVAL, until_eod))
+    except Exception:
+        return POLL_INTERVAL
+
+def broker_entries_today(symbol):
+    try:
+        start = datetime.now(EASTERN).replace(hour=0, minute=0, second=0, microsecond=0)
+        orders = api.list_orders(status="closed", after=start.isoformat(), symbols=[symbol], limit=500)
+        entry_side = "buy"
+        return sum(1 for o in orders if o.side == entry_side and float(getattr(o, "filled_qty", 0) or 0) > 0)
+    except Exception as e:
+        debug_print(f"Could not count today's broker orders: {e}")
+        return 0
 
 def calculate_position_size(equity, stop_loss, current_price):
     debug_print(f"Calculating position size: equity=${equity:.2f}, stop=${stop_loss:.2f}, price=${current_price:.2f}")
@@ -1304,6 +1309,11 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
 def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, position_type):
     debug_print(f"Checking trailing stop: entry=${entry_price:.2f}, current=${current_price:.2f}")
     
+    if not USE_TRAILING_STOP:
+        if position_type == 'long':
+            return current_price <= initial_stop
+        return current_price >= initial_stop
+    
     if position_state.trailing_stop is None:
         position_state.trailing_stop = initial_stop
         debug_print(f"Initialized trailing stop: ${initial_stop:.2f}")
@@ -1376,7 +1386,7 @@ def main():
                 logger.info(f"💵  Starting equity: ${opening_equity:.2f}")
                 
                 settlement_tracker = SettlementTracker()
-                pdt_tracker = PDTTracker() if PDT_RULE else None
+                pdt_tracker = PDTTracker() if PDT_RULE and opening_equity < 25000 else None
                 
                 if T1_SETTLEMENT_ENABLED:
                     settlement_tracker.settle_funds(current_date)
@@ -1403,6 +1413,12 @@ def main():
                         opening_equity = restored_state['opening_equity']
                         debug_print(f"Restored opening equity: ${opening_equity:.2f}")
                     logger.info(f"📊  Session restored: {trades_today} trades today")
+                
+                if not ENABLE_SHORT_SELLING:
+                    broker_trades = broker_entries_today(SYMBOL)
+                    if broker_trades > trades_today:
+                        trades_today = broker_trades
+                        logger.info(f"📊  Broker shows {trades_today} entries today")
                 
                 entry_strength = 0
                 entry_rsi = 0
@@ -1465,6 +1481,14 @@ def main():
                         time.sleep(10)
                         continue
                     
+                    try:
+                        minutes_to_close = (clock.next_close - clock.timestamp).total_seconds() / 60
+                    except Exception:
+                        minutes_to_close = None
+                    if minutes_to_close is not None and minutes_to_close <= EOD_CLOSE_MINUTES:
+                        logger.info(f"🕓  {minutes_to_close:.0f} min to close, flattening for end of day")
+                        break
+                    
                     current_equity = fetch_equity()
                     drawdown = (opening_equity - current_equity) / opening_equity if opening_equity > 0 else 0
                     
@@ -1478,7 +1502,7 @@ def main():
                         logger.info("🛑  Trading halted for the day")
                     
                     if halted_for_day:
-                        time.sleep(POLL_INTERVAL)
+                        time.sleep(poll_sleep_seconds(clock))
                         continue
                     
                     bars = get_recent_bars(SYMBOL, 10)
@@ -1514,6 +1538,11 @@ def main():
                                     else:
                                         exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
                                         pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
+                                    
+                                    if exit_price is None or current_position_qty(SYMBOL) != 0:
+                                        logger.error("❌  Exit order did not fully fill, position still open, retrying")
+                                        time.sleep(30)
+                                        continue
                                     
                                     pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
                                     
@@ -1551,10 +1580,9 @@ def main():
                                     )
                                     
                                     position_active = False
-                                    trade_count += 1
                                     position_state.reset()
                                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
-                                    time.sleep(POLL_INTERVAL)
+                                    time.sleep(poll_sleep_seconds(clock))
                                     continue
                         
                         qty_before_scale = current_position_qty(SYMBOL)
@@ -1608,7 +1636,7 @@ def main():
                                 position_active = False
                                 position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
-                                time.sleep(POLL_INTERVAL)
+                                time.sleep(poll_sleep_seconds(clock))
                                 continue
                         
                         if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
@@ -1632,6 +1660,11 @@ def main():
                                     else:
                                         exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
                                         pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
+                                    
+                                    if exit_price is None or current_position_qty(SYMBOL) != 0:
+                                        logger.error("❌  Exit order did not fully fill, position still open, retrying")
+                                        time.sleep(30)
+                                        continue
                                     
                                     pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
                                     
@@ -1669,12 +1702,11 @@ def main():
                                     )
                                     
                                     position_active = False
-                                    trade_count += 1
                                     logger.info("🛑  Stop hit")
                                     debug_print("Stop hit, position closed")
                                     position_state.reset()
                                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
-                                    time.sleep(POLL_INTERVAL)
+                                    time.sleep(poll_sleep_seconds(clock))
                                     continue
                         elif atr_based_trailing_stop(SYMBOL, entry_price, current_price, stop_loss, position_type):
                             qty = current_position_qty(SYMBOL)
@@ -1688,6 +1720,11 @@ def main():
                                 else:
                                     exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
                                     pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
+                                
+                                if exit_price is None or current_position_qty(SYMBOL) != 0:
+                                    logger.error("❌  Exit order did not fully fill, position still open, retrying")
+                                    time.sleep(30)
+                                    continue
                                 
                                 pnl_percent = (pnl_dollars / (entry_price * abs(qty)) * 100) if entry_price > 0 and qty != 0 else 0
                                 
@@ -1725,12 +1762,11 @@ def main():
                                 )
                                 
                                 position_active = False
-                                trade_count += 1
                                 logger.info("🛑  Stop hit")
                                 debug_print("Stop hit, position closed")
                                 position_state.reset()
                                 debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
-                                time.sleep(POLL_INTERVAL)
+                                time.sleep(poll_sleep_seconds(clock))
                                 continue
                     
                     if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
@@ -1763,7 +1799,7 @@ def main():
                             log_missed_signal(datetime.now(EASTERN), signal, 'max_trades_per_day', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
                         logger.info(f"📊  Daily limit ({MAX_TRADES_PER_DAY}) - monitoring only")
                         debug_print(f"Daily trade limit reached ({trades_today}/{MAX_TRADES_PER_DAY})")
-                        time.sleep(POLL_INTERVAL)
+                        time.sleep(poll_sleep_seconds(clock))
                         continue
 
                     if PDT_RULE and pdt_tracker and not pdt_tracker.can_trade():
@@ -1771,7 +1807,7 @@ def main():
                             log_missed_signal(datetime.now(EASTERN), signal, 'pdt_limit', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
                         logger.warning(f"🚫  PDT limit reached ({pdt_tracker.rolling_count()}/3 trades in rolling 5-day window) - monitoring only")
                         debug_print(f"PDT limit reached, skipping signal")
-                        time.sleep(POLL_INTERVAL)
+                        time.sleep(poll_sleep_seconds(clock))
                         continue
                     
                     if signal == 'sell' and not ENABLE_SHORT_SELLING:
@@ -1913,7 +1949,7 @@ def main():
                     )
                     
                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)}...")
-                    time.sleep(POLL_INTERVAL)
+                    time.sleep(poll_sleep_seconds(clock))
                 
                 logger.info("🔚  Session ending...")
                 debug_print("Session ending, closing all positions...")
@@ -1924,8 +1960,13 @@ def main():
                     qty = current_position_qty(SYMBOL)
                     
                     if qty != 0:
-                        bars_eod = get_recent_bars(SYMBOL, 10)
-                        exit_price = bars_eod['close'].iloc[-1] if bars_eod is not None and len(bars_eod) > 0 else current_price
+                        if position_type == 'long':
+                            exit_price = submit_market_sell(SYMBOL, qty)
+                        else:
+                            exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
+                        if exit_price is None:
+                            bars_eod = get_recent_bars(SYMBOL, 10)
+                            exit_price = bars_eod['close'].iloc[-1] if bars_eod is not None and len(bars_eod) > 0 else current_price
                         
                         if position_type == 'long':
                             pnl_dollars = (exit_price - entry_price) * qty
