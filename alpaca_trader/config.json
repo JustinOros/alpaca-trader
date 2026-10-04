@@ -70,5 +70,6 @@
     "MR_EXIT_RSI": 70,
     "MR_EXIT_MA": 5,
     "MR_REQUIRE_200_SMA": true,
-    "MR_MAX_HOLD_DAYS": 10
+    "MR_MAX_HOLD_DAYS": 10,
+    "OVERNIGHT_REQUIRE_200_SMA": false
 }

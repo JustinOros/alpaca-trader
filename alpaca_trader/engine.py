@@ -14,7 +14,7 @@ from .api import AlpacaClient
 from .indicators import sma, ema, rsi, atr, adx, macd, bollinger
 from .filters import check_volume, check_candle_pattern, check_macd_confirmation, check_200_sma_filter, detect_market_regime, get_vix
 from .filters import check_multiframe_confluence
-from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped, mean_reversion_exit
+from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped, mean_reversion_exit, overnight_exit_due
 from .utils import EASTERN, seconds_to_human_readable
 
 BARS_FOR_200_SMA = 210
@@ -132,7 +132,8 @@ DEFAULT_CONFIG = {
     "MR_EXIT_RSI": 70,
     "MR_EXIT_MA": 5,
     "MR_REQUIRE_200_SMA": True,
-    "MR_MAX_HOLD_DAYS": 10
+    "MR_MAX_HOLD_DAYS": 10,
+    "OVERNIGHT_REQUIRE_200_SMA": False
 }
 
 if not ENV_PATH.exists():
@@ -324,9 +325,10 @@ if not 0 < MAX_POSITION_PCT <= 1:
     logger.error(f"⚠️  Configuration error: MAX_POSITION_PCT must be between 0 and 1, got {MAX_POSITION_PCT}")
     sys.exit(1)
 STRATEGY_CONFIG = StrategyConfig(config)
-if STRATEGY_CONFIG.strategy_mode == "mean_reversion" and not HOLD_OVERNIGHT:
-    logger.error("⚠️  Configuration error: STRATEGY_MODE mean_reversion requires HOLD_OVERNIGHT true")
+if STRATEGY_CONFIG.strategy_mode in ("mean_reversion", "overnight") and not HOLD_OVERNIGHT:
+    logger.error(f"⚠️  Configuration error: STRATEGY_MODE {STRATEGY_CONFIG.strategy_mode} requires HOLD_OVERNIGHT true")
     sys.exit(1)
+OVERNIGHT_MODE = STRATEGY_CONFIG.strategy_mode == "overnight"
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -1131,7 +1133,7 @@ def or_fvg_signal_generator(symbol):
     
     return signal, strength, stop_loss, position_type
 
-def advanced_signal_generator(symbol):
+def advanced_signal_generator(symbol, entry_window=False):
     debug_print(f"Generating signal for {symbol}")
     bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
     if HOLD_OVERNIGHT and bars is not None:
@@ -1148,7 +1150,7 @@ def advanced_signal_generator(symbol):
             debug_print(f"Daily bars for 200 SMA unavailable: {e}")
     
     vix_level = get_vix(api, SYMBOL, USE_VIX_FILTER)
-    result = evaluate_signal(bars, STRATEGY_CONFIG, daily=daily, vix=vix_level, bars_completed=HOLD_OVERNIGHT)
+    result = evaluate_signal(bars, STRATEGY_CONFIG, daily=daily, vix=vix_level, bars_completed=HOLD_OVERNIGHT, entry_window=entry_window)
     
     debug_print(f"Indicators: price={result['price']:.2f}, RSI={result['rsi']:.1f}, ADX={result['adx']:.1f}, ATR={result['atr']:.2f}, spread={result['ma_spread']:.2f}, regime={result['regime']}")
     
@@ -1272,6 +1274,8 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
     return False
 
 def check_exit_reason(symbol, entry_price, current_price, initial_stop, position_type, entry_time=None):
+    if OVERNIGHT_MODE and overnight_exit_due(entry_time, datetime.now(EASTERN)):
+        return 'overnight_exit'
     if atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, position_type):
         return 'stop_hit'
     if STRATEGY_CONFIG.strategy_mode == "mean_reversion":
@@ -1429,8 +1433,10 @@ def main():
                 retry_count = 0
                 max_retries = 3
                 halted_for_day = False
+                eod_window_done = False
                 
                 while clock.is_open:
+                    eod_window = False
                     try:
                         clock = api.get_clock()
                     except Exception as e:
@@ -1443,8 +1449,13 @@ def main():
                     except Exception:
                         minutes_to_close = None
                     if minutes_to_close is not None and minutes_to_close <= EOD_CLOSE_MINUTES:
-                        logger.info(f"🕓  {minutes_to_close:.0f} min to close, flattening for end of day")
-                        break
+                        if OVERNIGHT_MODE and not eod_window_done and not halted_for_day:
+                            eod_window = True
+                            eod_window_done = True
+                            logger.info(f"🕓  {minutes_to_close:.0f} min to close, overnight entry window")
+                        else:
+                            logger.info(f"🕓  {minutes_to_close:.0f} min to close, ending session")
+                            break
                     
                     current_equity = fetch_equity()
                     drawdown = (opening_equity - current_equity) / opening_equity if opening_equity > 0 else 0
@@ -1729,7 +1740,7 @@ def main():
                     if STRATEGY_MODE == "or_fvg" or OR_FVG_ENABLED:
                         signal, strength, signal_stop_loss, signal_position_type = or_fvg_signal_generator(SYMBOL)
                     else:
-                        signal, strength, signal_stop_loss, signal_position_type = advanced_signal_generator(SYMBOL)
+                        signal, strength, signal_stop_loss, signal_position_type = advanced_signal_generator(SYMBOL, eod_window)
                     
                     bars_for_signal = get_recent_bars(SYMBOL, 50)
                     signal_rsi = 0

@@ -53,6 +53,7 @@ class StrategyConfig:
         self.mr_exit_ma = int(config.get("MR_EXIT_MA", 5))
         self.mr_require_200_sma = bool(config.get("MR_REQUIRE_200_SMA", True))
         self.mr_max_hold_days = int(config.get("MR_MAX_HOLD_DAYS", 10))
+        self.overnight_require_200_sma = bool(config.get("OVERNIGHT_REQUIRE_200_SMA", False))
 
 
 def _ma(closes, window, use_ema):
@@ -150,9 +151,41 @@ def mean_reversion_exit(bars, cfg, entry_time):
     return None
 
 
-def evaluate_signal(bars, cfg, daily=None, vix=0.0, bars_completed=False):
+def evaluate_overnight(bars, cfg, entry_window):
+    need = max(15, 200 if cfg.overnight_require_200_sma else 0) + 1
+    if bars is None or len(bars) < need:
+        return _result(reason="insufficient_data")
+    closes = bars["close"]
+    current_price = float(closes.iloc[-1])
+    atr_val = float(atr(bars["high"], bars["low"], closes).iloc[-1])
+    metrics = {
+        "price": current_price,
+        "rsi": float(rsi(closes, 14).iloc[-1]),
+        "adx": float("nan"),
+        "atr": atr_val,
+        "ma_spread": float("nan"),
+        "regime": "overnight",
+    }
+    if not entry_window:
+        return _result(reason="outside_entry_window", **metrics)
+    if cfg.overnight_require_200_sma and current_price <= float(sma(closes, 200).iloc[-1]):
+        return _result(reason="below_200_sma", **metrics)
+    if math.isnan(atr_val) or atr_val <= 0:
+        return _result(reason="invalid_atr", **metrics)
+    return _result("buy", 1.0, current_price - atr_val * cfg.atr_stop_multiplier, "long", "overnight_buy", **metrics)
+
+
+def overnight_exit_due(entry_time, now):
+    if entry_time is None:
+        return False
+    return pd.Timestamp(entry_time).date() < pd.Timestamp(now).date()
+
+
+def evaluate_signal(bars, cfg, daily=None, vix=0.0, bars_completed=False, entry_window=False):
     if cfg.strategy_mode == "mean_reversion":
         return evaluate_mean_reversion(bars, cfg)
+    if cfg.strategy_mode == "overnight":
+        return evaluate_overnight(bars, cfg, entry_window)
     if bars is None or len(bars) < cfg.long_window:
         return _result(reason="insufficient_data")
 

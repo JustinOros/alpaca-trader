@@ -11,7 +11,7 @@ import pandas as pd
 import pytz
 
 from .indicators import atr
-from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped, mean_reversion_exit
+from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped, mean_reversion_exit, overnight_exit_due
 
 EASTERN = pytz.timezone("US/Eastern")
 PKG_DIR = Path(__file__).parent
@@ -292,6 +292,9 @@ class Backtester:
 
     def manage(self, t, price, bars, day_bars):
         p = self.pos
+        if self.cfg.strategy_mode == "overnight" and overnight_exit_due(p["entry_time"], t):
+            self.close(t, day_bars, "overnight_exit")
+            return True
         if self.max_hold > 0 and (t - p["entry_time"]).total_seconds() > self.max_hold:
             self.close(t, day_bars, "max_hold_time")
             return True
@@ -378,6 +381,17 @@ class Backtester:
                         if self.open_position(sig, price, t, self.equity(price), day_bars):
                             trades_today += 1
                 t += pd.Timedelta(seconds=self.poll)
+            if self.cfg.strategy_mode == "overnight" and self.pos is None and not halted and trades_today < self.max_trades and i < len(days) - 1:
+                bars = self.builder.bars_at(day, last_poll)
+                done = day_bars[day_bars["end"] <= last_poll]
+                if len(bars) and len(done):
+                    price = float(done["close"].iloc[-1])
+                    sig_bars = completed_bars(bars, self.signal_tf, last_poll)
+                    sig = evaluate_signal(sig_bars, self.cfg, entry_window=True)
+                    key = sig["signal"] or sig["reason"].split(" ")[0]
+                    signal_counts[key] = signal_counts.get(key, 0) + 1
+                    if sig["signal"] == "buy" and self.open_position(sig, price, last_poll, self.equity(price), day_bars):
+                        trades_today += 1
             if self.pos and (not self.hold_overnight or i == len(days) - 1):
                 self.close(last_poll, day_bars, "eod_close" if not self.hold_overnight else "end_of_test")
             close_price = float(day_bars["close"].iloc[-1])
@@ -493,8 +507,8 @@ def main(argv=None):
         print(f"Override {key} = {config[key]}")
     if config.get("STRATEGY_MODE") == "or_fvg" or config.get("OR_FVG_ENABLED"):
         sys.exit("OR-FVG mode is not supported by the backtester yet")
-    if str(config.get("STRATEGY_MODE", "")).lower() == "mean_reversion" and not config.get("HOLD_OVERNIGHT"):
-        sys.exit("STRATEGY_MODE mean_reversion requires HOLD_OVERNIGHT=true")
+    if str(config.get("STRATEGY_MODE", "")).lower() in ("mean_reversion", "overnight") and not config.get("HOLD_OVERNIGHT"):
+        sys.exit(f"STRATEGY_MODE {config.get('STRATEGY_MODE')} requires HOLD_OVERNIGHT=true")
     symbol = args.symbol or config.get("SYMBOL", "SPY")
     config["SYMBOL"] = symbol
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()

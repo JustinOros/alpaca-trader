@@ -202,6 +202,14 @@ MR_REQUIRE_200_SMA   Only buy dips while price is above the 200 SMA
 MR_MAX_HOLD_DAYS     Sell after this many trading days (0 disables)
 ```
 
+### Overnight
+
+Set `STRATEGY_MODE` to `overnight` (requires `HOLD_OVERNIGHT` true) to buy `EOD_CLOSE_MINUTES` before the close and sell at the next open. Holding across one close is not a day trade, so this mode does not count toward PDT.
+
+```
+OVERNIGHT_REQUIRE_200_SMA   Only buy when price is above the 200 SMA (default false)
+```
+
 ### Holding
 
 ```
