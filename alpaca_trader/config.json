@@ -67,7 +67,7 @@
     "MAX_POSITION_PCT": 0.95,
     "MR_RSI_PERIOD": 2,
     "MR_ENTRY_RSI": 10,
-    "MR_EXIT_RSI": 70,
+    "MR_EXIT_RSI": 100,
     "MR_EXIT_MA": 5,
     "MR_REQUIRE_200_SMA": true,
     "MR_MAX_HOLD_DAYS": 10,
