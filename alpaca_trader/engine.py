@@ -1147,10 +1147,11 @@ def advanced_signal_generator(symbol):
         debug_print(f"VIX filter triggered: {vix_level:.1f} > {VIX_THRESHOLD}")
         return None, 0, 0, None
     
-    if not check_volume(bars, VOLUME_MULTIPLIER):
-        if len(bars) >= 20 and "volume" in bars.columns:
-            avg_vol = bars["volume"].rolling(window=20).mean().iloc[-1]
-            cur_vol = bars["volume"].iloc[-1]
+    completed_bars = bars.iloc[:-1]
+    if not check_volume(completed_bars, VOLUME_MULTIPLIER):
+        if len(completed_bars) >= 20 and "volume" in completed_bars.columns:
+            avg_vol = completed_bars["volume"].rolling(window=20).mean().iloc[-1]
+            cur_vol = completed_bars["volume"].iloc[-1]
             debug_print(f"Volume filter failed: current={cur_vol:,.0f}, avg={avg_vol:,.0f}, required={avg_vol*VOLUME_MULTIPLIER:,.0f} ({VOLUME_MULTIPLIER}x)")
         else:
             debug_print("Volume filter failed: insufficient data")

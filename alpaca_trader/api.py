@@ -115,8 +115,13 @@ class AlpacaClient:
                     self.cancel_order(order_id)
                 except Exception as e:
                     logging.warning(f"Cancel after timeout failed for {order_id}: {e}")
-                time.sleep(1)
+                cancel_deadline = time.time() + 15
                 status = self.get_order(order_id)
+                while status.status not in _TERMINAL_ORDER_STATES and time.time() < cancel_deadline:
+                    time.sleep(1)
+                    status = self.get_order(order_id)
+                if status.status not in _TERMINAL_ORDER_STATES:
+                    logging.error(f"Order {order_id} still {status.status} after cancel request")
                 break
             time.sleep(0.5)
             status = self.get_order(order_id)
