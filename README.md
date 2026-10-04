@@ -210,6 +210,18 @@ Set `STRATEGY_MODE` to `overnight` (requires `HOLD_OVERNIGHT` true) to buy `EOD_
 OVERNIGHT_REQUIRE_200_SMA   Only buy when price is above the 200 SMA (default false)
 ```
 
+### Small Accounts
+
+```
+FRACTIONAL_SHARES     Buy fractional shares so small accounts can use their full allocation
+BASE_POSITION_PCT     Always hold this fraction of equity in SYMBOL (0 disables)
+BASE_REBALANCE_BAND   Only rebalance the base when it drifts this far from target (default 0.10)
+```
+
+The base position is topped up or trimmed at the start of each session and is never sold by strategy exits, the drawdown halt, or shutdown. Strategy trades use the room between the base and `MAX_POSITION_PCT`. Base share count is stored in `alpaca_trader/base_state.json`.
+
+Backtest at your real account size with `--capital`, for example `--capital 1000`.
+
 ### Holding
 
 ```

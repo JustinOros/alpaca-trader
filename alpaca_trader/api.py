@@ -133,7 +133,7 @@ class AlpacaClient:
             return float(avg_price)
         return None
 
-    def place_order(self, symbol, side, notional, limit_price, limit_order_timeout):
+    def place_order(self, symbol, side, notional, limit_price, limit_order_timeout, fractional=False):
         try:
             quote = self.get_latest_quote(symbol)
             if quote is None:
@@ -152,8 +152,11 @@ class AlpacaClient:
                 price_source = bid_price if side == "buy" else ask_price
             if price_source is None or price_source <= 0:
                 return None
-            shares = int(notional / price_source)
-            if shares == 0:
+            if fractional:
+                shares = math.floor(notional / price_source * 1e6) / 1e6
+            else:
+                shares = int(notional / price_source)
+            if shares <= 0:
                 return None
             if limit_price:
                 order = self.submit_order(symbol=symbol, qty=shares, side=side, type="limit", limit_price=round(limit_price, 2), time_in_force="day")

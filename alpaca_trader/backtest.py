@@ -188,6 +188,11 @@ class Backtester:
         self.comm = float(config.get("COMMISSION_PCT", 0.0))
         self.min_notional = float(config.get("MIN_NOTIONAL", 1.0))
         self.use_200 = bool(config.get("USE_200_SMA_FILTER", False))
+        self.fractional = bool(config.get("FRACTIONAL_SHARES", False))
+        self.base_pct = float(config.get("BASE_POSITION_PCT", 0.0))
+        self.base_band = float(config.get("BASE_REBALANCE_BAND", 0.10))
+        self.base_shares = 0.0
+        self.base_trades = 0
         self.sizing = str(config.get("POSITION_SIZING", "risk")).lower()
         self.max_position_pct = float(config.get("MAX_POSITION_PCT", 0.25))
         self.hold_overnight = bool(config.get("HOLD_OVERNIGHT", False))
@@ -203,21 +208,55 @@ class Backtester:
         raw = float(nxt["open"].iloc[0]) if len(nxt) else float(day_bars["close"].iloc[-1])
         return raw * (1 + self.slip) if side == "buy" else raw * (1 - self.slip)
 
+    def to_shares(self, qty):
+        if self.fractional:
+            return math.floor(qty * 1e6) / 1e6
+        return float(int(qty))
+
     def equity(self, price):
+        base_value = self.base_shares * price
         if self.pos is None:
-            return self.cash
+            return self.cash + base_value
         if self.pos["type"] == "long":
-            return self.cash + self.pos["shares"] * price
-        return self.cash - self.pos["shares"] * price
+            return self.cash + base_value + self.pos["shares"] * price
+        return self.cash + base_value - self.pos["shares"] * price
+
+    def maintain_base(self, t, price, day_bars):
+        if self.base_pct <= 0:
+            return
+        target = self.to_shares(self.equity(price) * self.base_pct / price)
+        if self.base_shares < target * (1 - self.base_band):
+            qty = self.to_shares(target - self.base_shares)
+            if qty <= 0:
+                return
+            fill = self.fill_price(day_bars, t, "buy")
+            cost = qty * fill * (1 + self.comm)
+            if cost > self.cash:
+                qty = self.to_shares(self.cash / (fill * (1 + self.comm)))
+                cost = qty * fill * (1 + self.comm)
+            if qty <= 0:
+                return
+            self.cash -= cost
+            self.base_shares += qty
+            self.base_trades += 1
+        elif self.base_shares > target * (1 + self.base_band):
+            qty = self.to_shares(self.base_shares - target)
+            if qty <= 0:
+                return
+            fill = self.fill_price(day_bars, t, "sell")
+            self.cash += qty * fill * (1 - self.comm)
+            self.base_shares -= qty
+            self.base_trades += 1
 
     def exposure(self, price):
-        if self.pos is None:
-            return 0.0
+        shares = self.base_shares + (self.pos["shares"] if self.pos else 0.0)
         eq = self.equity(price)
-        return self.pos["shares"] * price / eq if eq > 0 else 0.0
+        return shares * price / eq if eq > 0 else 0.0
 
     def open_position(self, sig, price, t, equity, day_bars):
-        cap = equity * self.max_position_pct
+        cap = equity * self.max_position_pct - self.base_shares * price
+        if cap < self.min_notional:
+            return False
         if self.sizing == "fixed":
             value = cap
         else:
@@ -226,8 +265,8 @@ class Backtester:
         value = max(self.min_notional, value)
         side = "buy" if sig["position_type"] == "long" else "sell"
         fill = self.fill_price(day_bars, t, side)
-        shares = int(value / fill)
-        if shares <= 0 or value > self.cash:
+        shares = self.to_shares(value / fill)
+        if shares <= 0 or shares * fill > self.cash:
             return False
         cost = shares * fill * self.comm
         if sig["position_type"] == "long":
@@ -304,7 +343,7 @@ class Backtester:
             profit_pct = (p["entry"] - price) / p["entry"] * 100
         risk_pct = abs(p["entry"] - p["stop"]) / p["entry"] * 100
         if self.pt1 > 0 and profit_pct >= risk_pct * self.pt1 and not p["t1_hit"]:
-            half = int(p["shares"] / 2)
+            half = self.to_shares(p["shares"] / 2)
             if half > 0:
                 self.reduce(half, t, day_bars)
             p["t1_hit"] = True
@@ -348,6 +387,7 @@ class Backtester:
             halted = False
             t = open_t
             last_price = float(day_bars["open"].iloc[0])
+            first_poll = True
             while t < last_poll:
                 done = day_bars[day_bars["end"] <= t]
                 bars = self.builder.bars_at(day, t)
@@ -356,6 +396,9 @@ class Backtester:
                     continue
                 price = float(done["close"].iloc[-1]) if len(done) else float(bars["close"].iloc[-1])
                 last_price = price
+                if first_poll:
+                    self.maintain_base(t, price, day_bars)
+                    first_poll = False
                 eq = self.equity(price)
                 if not halted and opening_equity > 0 and (opening_equity - eq) / opening_equity > self.max_dd:
                     if self.pos:
@@ -468,6 +511,8 @@ def report(bt, signal_counts):
         print(f"Avg hold            {trades['hold_minutes'].mean():.0f} min ({trades['hold_days'].mean():.1f} days)")
         print(f"Time in market      {eq['in_market'].mean() * 100:.1f}% of days")
         print(f"Avg exposure        {eq['exposure'].mean() * 100:.1f}% of equity")
+        if bt.base_pct > 0:
+            print(f"Base position       {bt.base_pct * 100:.0f}% target, {bt.base_trades} rebalances, ends at {bt.base_shares:.4f} shares")
         print()
         print("Exit reasons:")
         for reason, count in trades["exit_reason"].value_counts().items():

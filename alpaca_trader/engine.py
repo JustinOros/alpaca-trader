@@ -3,6 +3,7 @@ import sys
 import logging
 import json
 import time
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -38,6 +39,8 @@ PERFORMANCE_PATH = SCRIPT_DIR / "performance.csv"
 INDICATORS_PATH = SCRIPT_DIR / "indicators.csv"
 PDT_TRACKER_PATH = SCRIPT_DIR / "pdt_tracker.csv"
 POSITION_STATE_PATH = SCRIPT_DIR / "position_state.json"
+BASE_STATE_PATH = SCRIPT_DIR / "base_state.json"
+QTY_EPSILON = 1e-6
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,7 +136,10 @@ DEFAULT_CONFIG = {
     "MR_EXIT_MA": 5,
     "MR_REQUIRE_200_SMA": True,
     "MR_MAX_HOLD_DAYS": 10,
-    "OVERNIGHT_REQUIRE_200_SMA": False
+    "OVERNIGHT_REQUIRE_200_SMA": False,
+    "FRACTIONAL_SHARES": True,
+    "BASE_POSITION_PCT": 0.0,
+    "BASE_REBALANCE_BAND": 0.10
 }
 
 if not ENV_PATH.exists():
@@ -329,6 +335,15 @@ if STRATEGY_CONFIG.strategy_mode in ("mean_reversion", "overnight") and not HOLD
     logger.error(f"⚠️  Configuration error: STRATEGY_MODE {STRATEGY_CONFIG.strategy_mode} requires HOLD_OVERNIGHT true")
     sys.exit(1)
 OVERNIGHT_MODE = STRATEGY_CONFIG.strategy_mode == "overnight"
+FRACTIONAL_SHARES = bool(config.get("FRACTIONAL_SHARES", False))
+BASE_POSITION_PCT = float(config.get("BASE_POSITION_PCT", 0.0))
+BASE_REBALANCE_BAND = float(config.get("BASE_REBALANCE_BAND", 0.10))
+if not 0 <= BASE_POSITION_PCT <= MAX_POSITION_PCT:
+    logger.error(f"⚠️  Configuration error: BASE_POSITION_PCT must be between 0 and MAX_POSITION_PCT ({MAX_POSITION_PCT}), got {BASE_POSITION_PCT}")
+    sys.exit(1)
+if BASE_POSITION_PCT > 0 and ENABLE_SHORT_SELLING:
+    logger.error("⚠️  Configuration error: BASE_POSITION_PCT cannot be used with ENABLE_SHORT_SELLING")
+    sys.exit(1)
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -754,9 +769,87 @@ def close_all_positions():
         logger.error(f"Error closing positions: {e}")
         debug_print(f"Error closing positions: {e}")
 
+def order_qty(qty):
+    qty = abs(float(qty))
+    if FRACTIONAL_SHARES:
+        return math.floor(qty * 1e6) / 1e6
+    return int(qty)
+
+def load_base_shares():
+    try:
+        if BASE_STATE_PATH.exists():
+            with open(BASE_STATE_PATH) as f:
+                data = json.load(f)
+            if data.get("symbol") == SYMBOL:
+                return float(data.get("shares", 0.0))
+    except Exception as e:
+        debug_print(f"Failed to load base state: {e}")
+    return 0.0
+
+def save_base_shares(shares):
+    try:
+        with open(BASE_STATE_PATH, "w") as f:
+            json.dump({"symbol": SYMBOL, "shares": shares}, f, indent=2)
+    except Exception as e:
+        debug_print(f"Failed to save base state: {e}")
+
+BASE_SHARES = load_base_shares() if BASE_POSITION_PCT > 0 else 0.0
+
+def tradable_qty(symbol):
+    total = current_position_qty(symbol)
+    if BASE_POSITION_PCT > 0 and total > 0:
+        total = total - BASE_SHARES
+    return total if abs(total) > QTY_EPSILON else 0
+
+def maintain_base_position(symbol):
+    global BASE_SHARES
+    if BASE_POSITION_PCT <= 0:
+        return
+    total = current_position_qty(symbol)
+    if BASE_SHARES > total + QTY_EPSILON:
+        logger.warning(f"⚠️  Broker holds {total} {symbol}, less than base {BASE_SHARES}, resetting base to {max(0.0, total)}")
+        BASE_SHARES = max(0.0, total)
+        save_base_shares(BASE_SHARES)
+    bid, ask = get_bid_ask(symbol)
+    if not ask or ask <= 0:
+        debug_print("No quote for base position check")
+        return
+    equity = fetch_equity()
+    target = equity * BASE_POSITION_PCT / ask
+    if not FRACTIONAL_SHARES:
+        target = float(int(target))
+    before = current_position_qty(symbol)
+    if BASE_SHARES < target * (1 - BASE_REBALANCE_BAND):
+        buy_value = (target - BASE_SHARES) * ask
+        logger.info(f"🧱  Base position {BASE_SHARES:.4f} below target {target:.4f}, buying ${buy_value:.2f}")
+        if submit_market_buy(symbol, buy_value) is None:
+            return
+    elif BASE_SHARES > target * (1 + BASE_REBALANCE_BAND):
+        sell_qty = order_qty(BASE_SHARES - target)
+        if sell_qty <= 0:
+            return
+        logger.info(f"🧱  Base position {BASE_SHARES:.4f} above target {target:.4f}, selling {sell_qty}")
+        if submit_market_sell(symbol, sell_qty) is None:
+            return
+    else:
+        debug_print(f"Base position {BASE_SHARES:.4f} within band of target {target:.4f}")
+        return
+    after = current_position_qty(symbol)
+    BASE_SHARES = max(0.0, BASE_SHARES + (after - before))
+    save_base_shares(BASE_SHARES)
+    logger.info(f"🧱  Base position now {BASE_SHARES:.4f} {symbol}")
+
 def close_symbol_position(symbol):
     debug_print(f"Closing position for {symbol}")
     try:
+        if BASE_POSITION_PCT > 0:
+            qty = tradable_qty(symbol)
+            if qty <= 0:
+                debug_print(f"No {symbol} trade position to close, base position kept")
+                return
+            submit_market_sell(symbol, qty)
+            logger.info(f"✅  {symbol} trade position closed, base position kept")
+            return
         if current_position_qty(symbol) == 0:
             debug_print(f"No {symbol} position to close")
             return
@@ -785,7 +878,7 @@ def submit_market_buy(symbol, position_size):
         debug_print(f"Invalid position size: ${position_size:.2f}")
         return None
     try:
-        execution_price = api.place_order(symbol, "buy", position_size, None, LIMIT_ORDER_TIMEOUT)
+        execution_price = api.place_order(symbol, "buy", position_size, None, LIMIT_ORDER_TIMEOUT, fractional=FRACTIONAL_SHARES)
         if execution_price:
             logger.info(f"🟢  BUY {symbol} @ ${execution_price:.2f}")
             debug_print(f"Buy order filled @ ${execution_price:.2f}")
@@ -802,7 +895,7 @@ def submit_market_buy(symbol, position_size):
 def submit_market_sell(symbol, qty):
     debug_print(f"Submitting market sell order: {symbol}, qty={qty}")
     try:
-        shares = int(qty)
+        shares = order_qty(qty)
         if shares <= 0:
             debug_print(f"Invalid quantity: {shares}")
             return None
@@ -825,14 +918,14 @@ def submit_limit_buy(symbol, position_size, limit_price):
         debug_print(f"Invalid position size: ${position_size:.2f}")
         return None
     try:
-        execution_price = api.place_order(symbol, "buy", position_size, limit_price, LIMIT_ORDER_TIMEOUT)
+        execution_price = api.place_order(symbol, "buy", position_size, limit_price, LIMIT_ORDER_TIMEOUT, fractional=FRACTIONAL_SHARES)
         if execution_price:
             logger.info(f"🟢  BUY {symbol} @ ${execution_price:.2f}")
             debug_print(f"Limit buy filled @ ${execution_price:.2f}")
             return execution_price
         else:
             debug_print("Limit order timeout, attempting market order")
-            execution_price = api.place_order(symbol, "buy", position_size, None, LIMIT_ORDER_TIMEOUT)
+            execution_price = api.place_order(symbol, "buy", position_size, None, LIMIT_ORDER_TIMEOUT, fractional=FRACTIONAL_SHARES)
             if execution_price:
                 logger.info(f"🟢  BUY {symbol} @ ${execution_price:.2f} (market)")
                 debug_print(f"Market order filled @ ${execution_price:.2f}")
@@ -896,7 +989,7 @@ def submit_limit_short_sell(symbol, position_size, limit_price):
 def submit_buy_to_cover(symbol, qty):
     debug_print(f"Submitting buy to cover: {symbol}, qty={qty}")
     try:
-        shares = int(qty)
+        shares = order_qty(qty)
         if shares <= 0:
             debug_print(f"Invalid quantity: {shares}")
             return None
@@ -933,6 +1026,9 @@ def broker_entries_today(symbol):
 def calculate_position_size(equity, stop_loss, current_price):
     debug_print(f"Calculating position size: equity=${equity:.2f}, stop=${stop_loss:.2f}, price=${current_price:.2f}, mode={POSITION_SIZING}")
     max_position = equity * MAX_POSITION_PCT
+    if BASE_POSITION_PCT > 0:
+        max_position = max(0.0, max_position - BASE_SHARES * current_price)
+        debug_print(f"Room above base position: ${max_position:.2f}")
     if POSITION_SIZING == "fixed":
         position_value = max_position
     else:
@@ -941,13 +1037,10 @@ def calculate_position_size(equity, stop_loss, current_price):
         if price_risk == 0:
             debug_print("Price risk is zero, returning MIN_NOTIONAL")
             return MIN_NOTIONAL
-        position_value = (risk_amount / price_risk) * current_price
-        if position_value > max_position:
-            position_value = max_position
-            debug_print(f"Position capped at {MAX_POSITION_PCT:.0%} equity: ${position_value:.2f}")
+        position_value = min((risk_amount / price_risk) * current_price, max_position)
     if position_value < MIN_NOTIONAL:
-        position_value = MIN_NOTIONAL
-        debug_print(f"Position set to minimum: ${position_value:.2f}")
+        debug_print(f"Position ${position_value:.2f} below MIN_NOTIONAL, skipping")
+        return 0.0
     debug_print(f"Calculated position size: ${position_value:.2f}")
     return position_value
 
@@ -1179,7 +1272,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
         target_pct = risk_pct * OR_FVG_RISK_REWARD_RATIO
         
         if profit_pct >= target_pct:
-            qty = current_position_qty(symbol)
+            qty = tradable_qty(symbol)
             if qty != 0:
                 debug_print(f"OR-FVG target hit ({target_pct:.2f}%), closing {qty} shares")
                 exit_price = None
@@ -1196,9 +1289,9 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
     target_2_pct = risk_pct * PROFIT_TARGET_2
     
     if PROFIT_TARGET_1 > 0 and profit_pct >= target_1_pct and not position_state.target_1_hit:
-        qty = current_position_qty(symbol)
+        qty = tradable_qty(symbol)
         if qty != 0:
-            half_qty = int(qty / 2)
+            half_qty = order_qty(qty / 2)
             if half_qty > 0:
                 debug_print(f"Target 1 hit ({target_1_pct:.2f}%), scaling out {half_qty} shares")
                 exit_price = None
@@ -1215,7 +1308,7 @@ def scale_out_profit_taking(symbol, entry_price, current_price, stop_loss, posit
                 debug_print(f"Position size {qty} too small for partial exit, holding for target 2")
     
     if PROFIT_TARGET_2 > 0 and profit_pct >= target_2_pct:
-        qty = current_position_qty(symbol)
+        qty = tradable_qty(symbol)
         if qty != 0:
             debug_print(f"Target 2 hit ({target_2_pct:.2f}%), closing remaining {qty} shares")
             exit_price = None
@@ -1376,11 +1469,19 @@ def main():
                 max_intraday_drawdown = 0
                 last_indicator_log = datetime.now(EASTERN)
                 
+                if BASE_POSITION_PCT > 0:
+                    try:
+                        maintain_base_position(SYMBOL)
+                    except Exception as e:
+                        logger.error(f"Base position maintenance failed: {e}")
+                
                 logger.info("🔎  Checking for existing positions...")
                 try:
                     existing_position = api.get_position(SYMBOL)
                     qty = float(existing_position.qty)
-                    if qty != 0:
+                    if BASE_POSITION_PCT > 0 and qty > 0:
+                        qty = qty - BASE_SHARES
+                    if abs(qty) > QTY_EPSILON:
                         position_active = True
                         entry_price = float(existing_position.avg_entry_price)
                         position_type = 'long' if qty > 0 else 'short'
@@ -1414,6 +1515,7 @@ def main():
                         if saved and saved.get('symbol') == SYMBOL and saved.get('position_type') == position_type:
                             try:
                                 entry_time = datetime.fromisoformat(saved['entry_time'])
+                                entry_price = float(saved.get('entry_price', entry_price))
                                 stop_loss = float(saved['stop_loss'])
                                 position_state.target_1_hit = bool(saved.get('target_1_hit', False))
                                 if saved.get('trailing_stop') is not None:
@@ -1495,7 +1597,7 @@ def main():
                             if time_in_trade > MAX_HOLD_TIME:
                                 logger.info(f"⏰  Max hold time ({MAX_HOLD_TIME//60} min)")
                                 debug_print(f"Max hold time exceeded, closing position")
-                                qty = current_position_qty(SYMBOL)
+                                qty = tradable_qty(SYMBOL)
                                 if qty != 0:
                                     exit_time = datetime.now(EASTERN)
                                     hold_minutes = time_in_trade / 60
@@ -1507,7 +1609,7 @@ def main():
                                         exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
                                         pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
                                     
-                                    if exit_price is None or current_position_qty(SYMBOL) != 0:
+                                    if exit_price is None or tradable_qty(SYMBOL) != 0:
                                         logger.error("❌  Exit order did not fully fill, position still open, retrying")
                                         time.sleep(30)
                                         continue
@@ -1553,10 +1655,10 @@ def main():
                                     time.sleep(poll_sleep_seconds(clock))
                                     continue
                         
-                        qty_before_scale = current_position_qty(SYMBOL)
+                        qty_before_scale = tradable_qty(SYMBOL)
                         target_hit, exit_price_target = scale_out_profit_taking(SYMBOL, entry_price, current_price, stop_loss, position_type)
                         if target_hit:
-                            remaining_qty = current_position_qty(SYMBOL)
+                            remaining_qty = tradable_qty(SYMBOL)
                             if remaining_qty == 0:
                                 exit_time = datetime.now(EASTERN)
                                 hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
@@ -1617,7 +1719,7 @@ def main():
                                 debug_print(f"OR-FVG short stop hit: ${current_price:.2f} >= ${stop_loss:.2f}")
                             
                             if stop_hit:
-                                qty = current_position_qty(SYMBOL)
+                                qty = tradable_qty(SYMBOL)
                                 if qty != 0:
                                     exit_time = datetime.now(EASTERN)
                                     hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
@@ -1629,7 +1731,7 @@ def main():
                                         exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
                                         pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
                                     
-                                    if exit_price is None or current_position_qty(SYMBOL) != 0:
+                                    if exit_price is None or tradable_qty(SYMBOL) != 0:
                                         logger.error("❌  Exit order did not fully fill, position still open, retrying")
                                         time.sleep(30)
                                         continue
@@ -1677,7 +1779,7 @@ def main():
                                     time.sleep(poll_sleep_seconds(clock))
                                     continue
                         elif (exit_reason := check_exit_reason(SYMBOL, entry_price, current_price, stop_loss, position_type, entry_time)):
-                            qty = current_position_qty(SYMBOL)
+                            qty = tradable_qty(SYMBOL)
                             if qty != 0:
                                 exit_time = datetime.now(EASTERN)
                                 hold_minutes = (exit_time - entry_time).total_seconds() / 60 if entry_time else 0
@@ -1689,7 +1791,7 @@ def main():
                                     exit_price = submit_buy_to_cover(SYMBOL, abs(qty))
                                     pnl_dollars = (entry_price - exit_price) * abs(qty) if exit_price else 0
                                 
-                                if exit_price is None or current_position_qty(SYMBOL) != 0:
+                                if exit_price is None or tradable_qty(SYMBOL) != 0:
                                     logger.error("❌  Exit order did not fully fill, position still open, retrying")
                                     time.sleep(30)
                                     continue
@@ -1790,7 +1892,10 @@ def main():
                         buying_power = fetch_buying_power(settlement_tracker)
                         position_size = calculate_position_size(current_equity, signal_stop_loss, current_price)
                         
-                        if buying_power >= position_size:
+                        if position_size <= 0:
+                            logger.info("📊  Signal skipped: no room for a new position")
+                            log_missed_signal(datetime.now(EASTERN), signal, 'no_position_room', current_price, SYMBOL, strength, signal_rsi, signal_adx, regime)
+                        elif buying_power >= position_size:
                             execution_price = None
                             
                             if signal == 'buy':
@@ -1944,7 +2049,7 @@ def main():
                 elif position_active and entry_time:
                     exit_time = datetime.now(EASTERN)
                     hold_minutes = (exit_time - entry_time).total_seconds() / 60
-                    qty = current_position_qty(SYMBOL)
+                    qty = tradable_qty(SYMBOL)
                     
                     if qty != 0:
                         if position_type == 'long':
