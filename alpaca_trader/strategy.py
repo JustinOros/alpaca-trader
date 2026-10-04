@@ -46,6 +46,13 @@ class StrategyConfig:
         self.rsi_range_oversold = float(config.get("RSI_RANGE_OVERSOLD", 30))
         self.rsi_range_overbought = float(config.get("RSI_RANGE_OVERBOUGHT", 70))
         self.min_signal_strength = float(config.get("MIN_SIGNAL_STRENGTH", 0.4))
+        self.strategy_mode = str(config.get("STRATEGY_MODE", "ma_crossover")).lower()
+        self.mr_rsi_period = int(config.get("MR_RSI_PERIOD", 2))
+        self.mr_entry_rsi = float(config.get("MR_ENTRY_RSI", 10))
+        self.mr_exit_rsi = float(config.get("MR_EXIT_RSI", 70))
+        self.mr_exit_ma = int(config.get("MR_EXIT_MA", 5))
+        self.mr_require_200_sma = bool(config.get("MR_REQUIRE_200_SMA", True))
+        self.mr_max_hold_days = int(config.get("MR_MAX_HOLD_DAYS", 10))
 
 
 def _ma(closes, window, use_ema):
@@ -101,7 +108,51 @@ def trend_flipped(bars, cfg, position_type):
     return short_ma > long_ma
 
 
+def evaluate_mean_reversion(bars, cfg):
+    need = max(cfg.mr_exit_ma, cfg.mr_rsi_period + 1, 15, 200 if cfg.mr_require_200_sma else 0) + 1
+    if bars is None or len(bars) < need:
+        return _result(reason="insufficient_data")
+    closes = bars["close"]
+    current_price = float(closes.iloc[-1])
+    rsi_val = float(rsi(closes, cfg.mr_rsi_period).iloc[-1])
+    atr_val = float(atr(bars["high"], bars["low"], closes).iloc[-1])
+    metrics = {
+        "price": current_price,
+        "rsi": rsi_val,
+        "adx": float("nan"),
+        "atr": atr_val,
+        "ma_spread": current_price - float(sma(closes, cfg.mr_exit_ma).iloc[-1]),
+        "regime": "mean_reversion",
+    }
+    if cfg.mr_require_200_sma and current_price <= float(sma(closes, 200).iloc[-1]):
+        return _result(reason="below_200_sma", **metrics)
+    if rsi_val >= cfg.mr_entry_rsi:
+        return _result(reason="not_oversold", **metrics)
+    if math.isnan(atr_val) or atr_val <= 0:
+        return _result(reason="invalid_atr", **metrics)
+    return _result("buy", 1.0, current_price - atr_val * cfg.atr_stop_multiplier, "long", "oversold_buy", **metrics)
+
+
+def mean_reversion_exit(bars, cfg, entry_time):
+    if bars is None or len(bars) < max(cfg.mr_exit_ma, cfg.mr_rsi_period + 1) + 1:
+        return None
+    if entry_time is not None:
+        held = int((bars.index >= pd.Timestamp(entry_time).normalize()).sum())
+        if held < 1:
+            return None
+        if cfg.mr_max_hold_days > 0 and held >= cfg.mr_max_hold_days:
+            return "mr_max_hold"
+    closes = bars["close"]
+    if float(closes.iloc[-1]) > float(sma(closes, cfg.mr_exit_ma).iloc[-1]):
+        return "mr_above_ma"
+    if float(rsi(closes, cfg.mr_rsi_period).iloc[-1]) > cfg.mr_exit_rsi:
+        return "mr_rsi_exit"
+    return None
+
+
 def evaluate_signal(bars, cfg, daily=None, vix=0.0, bars_completed=False):
+    if cfg.strategy_mode == "mean_reversion":
+        return evaluate_mean_reversion(bars, cfg)
     if bars is None or len(bars) < cfg.long_window:
         return _result(reason="insufficient_data")
 

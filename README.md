@@ -189,6 +189,19 @@ USE_VIX_FILTER
 MULTIFRAME_FILTER
 ```
 
+### Mean Reversion
+
+Set `STRATEGY_MODE` to `mean_reversion` (requires `HOLD_OVERNIGHT` true) to buy oversold dips on completed bars:
+
+```
+MR_RSI_PERIOD        RSI length for the oversold check (default 2)
+MR_ENTRY_RSI         Buy when RSI is below this (default 10)
+MR_EXIT_RSI          Sell when RSI rises above this (default 70)
+MR_EXIT_MA           Sell when close is above this SMA (default 5)
+MR_REQUIRE_200_SMA   Only buy dips while price is above the 200 SMA
+MR_MAX_HOLD_DAYS     Sell after this many trading days (0 disables)
+```
+
 ### Holding
 
 ```
@@ -211,6 +224,19 @@ LIMIT_ORDER_TIMEOUT
 SLIPPAGE_PCT
 COMMISSION_PCT
 ```
+
+---
+
+## 🔍 Pattern Analysis
+
+Look for buy low patterns before building a strategy around them:
+
+```bash
+python3 analyze.py
+python3 analyze.py --start 2017-01-01 --split 2023-01-01
+```
+
+Reports overnight vs daytime returns, day of week returns, average intraday price path and when the daily low and high usually happen, and forward returns after dip signals (down streaks, RSI(2), lower Bollinger band, pullbacks from the 10 day high). Every table is shown for a discovery period and a later validation period. Only trust a pattern that holds up in both.
 
 ---
 
@@ -259,6 +285,7 @@ alpaca_trader/
 ├── engine.py        # Core trading loop
 ├── strategy.py      # Signal logic shared by live and backtest
 ├── backtest.py      # Historical backtester
+├── analyze.py       # Pattern analysis on historical data
 ├── indicators.py    # Technical analysis
 ├── filters.py       # Market condition filters
 ├── risk.py          # Risk & position sizing

@@ -14,11 +14,11 @@ from .api import AlpacaClient
 from .indicators import sma, ema, rsi, atr, adx, macd, bollinger
 from .filters import check_volume, check_candle_pattern, check_macd_confirmation, check_200_sma_filter, detect_market_regime, get_vix
 from .filters import check_multiframe_confluence
-from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped
+from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped, mean_reversion_exit
 from .utils import EASTERN, seconds_to_human_readable
 
 BARS_FOR_200_SMA = 210
-BARS_FOR_SIGNAL = 200
+BARS_FOR_SIGNAL = 250
 BARS_FOR_REGIME = 50
 BARS_FOR_ATR = 50
 MIN_BARS_FOR_ATR = 14
@@ -126,7 +126,13 @@ DEFAULT_CONFIG = {
     "HOLD_OVERNIGHT": False,
     "EXIT_ON_TREND_FLIP": False,
     "POSITION_SIZING": "risk",
-    "MAX_POSITION_PCT": 0.25
+    "MAX_POSITION_PCT": 0.25,
+    "MR_RSI_PERIOD": 2,
+    "MR_ENTRY_RSI": 10,
+    "MR_EXIT_RSI": 70,
+    "MR_EXIT_MA": 5,
+    "MR_REQUIRE_200_SMA": True,
+    "MR_MAX_HOLD_DAYS": 10
 }
 
 if not ENV_PATH.exists():
@@ -318,6 +324,9 @@ if not 0 < MAX_POSITION_PCT <= 1:
     logger.error(f"⚠️  Configuration error: MAX_POSITION_PCT must be between 0 and 1, got {MAX_POSITION_PCT}")
     sys.exit(1)
 STRATEGY_CONFIG = StrategyConfig(config)
+if STRATEGY_CONFIG.strategy_mode == "mean_reversion" and not HOLD_OVERNIGHT:
+    logger.error("⚠️  Configuration error: STRATEGY_MODE mean_reversion requires HOLD_OVERNIGHT true")
+    sys.exit(1)
 
 api = AlpacaClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -1262,9 +1271,16 @@ def atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, po
     
     return False
 
-def check_exit_reason(symbol, entry_price, current_price, initial_stop, position_type):
+def check_exit_reason(symbol, entry_price, current_price, initial_stop, position_type, entry_time=None):
     if atr_based_trailing_stop(symbol, entry_price, current_price, initial_stop, position_type):
         return 'stop_hit'
+    if STRATEGY_CONFIG.strategy_mode == "mean_reversion":
+        bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
+        if bars is not None:
+            reason = mean_reversion_exit(completed_bars(bars, BAR_TIMEFRAME, datetime.now(EASTERN)), STRATEGY_CONFIG, entry_time)
+            if reason:
+                debug_print(f"Mean reversion exit: {reason}")
+                return reason
     if EXIT_ON_TREND_FLIP:
         bars = get_recent_bars(symbol, BARS_FOR_SIGNAL)
         if bars is not None:
@@ -1649,7 +1665,7 @@ def main():
                                     debug_print(f"Sleeping {seconds_to_human_readable(POLL_INTERVAL)} after exit")
                                     time.sleep(poll_sleep_seconds(clock))
                                     continue
-                        elif (exit_reason := check_exit_reason(SYMBOL, entry_price, current_price, stop_loss, position_type)):
+                        elif (exit_reason := check_exit_reason(SYMBOL, entry_price, current_price, stop_loss, position_type, entry_time)):
                             qty = current_position_qty(SYMBOL)
                             if qty != 0:
                                 exit_time = datetime.now(EASTERN)

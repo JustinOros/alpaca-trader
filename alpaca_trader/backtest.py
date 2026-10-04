@@ -11,7 +11,7 @@ import pandas as pd
 import pytz
 
 from .indicators import atr
-from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped
+from .strategy import StrategyConfig, evaluate_signal, completed_bars, trend_flipped, mean_reversion_exit
 
 EASTERN = pytz.timezone("US/Eastern")
 PKG_DIR = Path(__file__).parent
@@ -172,7 +172,7 @@ class Backtester:
         self.end_date = end_date
         self.capital = capital
         self.signal_tf = config.get("BAR_TIMEFRAME", "15Min")
-        self.builder = SignalBarBuilder(base, self.signal_tf, 200)
+        self.builder = SignalBarBuilder(base, self.signal_tf, 250)
         self.poll = int(config.get("POLL_INTERVAL", 300))
         self.eod_minutes = int(config.get("EOD_CLOSE_MINUTES", 10))
         self.risk = float(config.get("RISK_PER_TRADE", 0.01))
@@ -322,6 +322,11 @@ class Backtester:
         if hit:
             self.close(t, day_bars, "stop_hit")
             return True
+        if self.cfg.strategy_mode == "mean_reversion":
+            reason = mean_reversion_exit(completed_bars(bars, self.signal_tf, t), self.cfg, p["entry_time"])
+            if reason:
+                self.close(t, day_bars, reason)
+                return True
         if self.exit_on_flip and trend_flipped(completed_bars(bars, self.signal_tf, t), self.cfg, p["type"]):
             self.close(t, day_bars, "trend_flip")
             return True
@@ -488,6 +493,8 @@ def main(argv=None):
         print(f"Override {key} = {config[key]}")
     if config.get("STRATEGY_MODE") == "or_fvg" or config.get("OR_FVG_ENABLED"):
         sys.exit("OR-FVG mode is not supported by the backtester yet")
+    if str(config.get("STRATEGY_MODE", "")).lower() == "mean_reversion" and not config.get("HOLD_OVERNIGHT"):
+        sys.exit("STRATEGY_MODE mean_reversion requires HOLD_OVERNIGHT=true")
     symbol = args.symbol or config.get("SYMBOL", "SPY")
     config["SYMBOL"] = symbol
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
