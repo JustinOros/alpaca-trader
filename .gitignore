@@ -1,0 +1,16 @@
+.DS_Store
+alpaca_trader/.env
+__pycache__/
+*.pyc
+*.log
+*.old
+alpaca_trader/backtest_cache/
+alpaca_trader/position_state.json
+alpaca_trader/backtest_trades.csv
+alpaca_trader/backtest_equity.csv
+alpaca_trader/trades.csv
+alpaca_trader/signals.csv
+alpaca_trader/performance.csv
+alpaca_trader/indicators.csv
+alpaca_trader/session.csv
+alpaca_trader/pdt_tracker.csv
