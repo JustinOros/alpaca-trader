@@ -1575,6 +1575,12 @@ def main():
                         time.sleep(poll_sleep_seconds(clock))
                         continue
                     
+                    if BASE_POSITION_PCT > 0:
+                        try:
+                            maintain_base_position(SYMBOL)
+                        except Exception as e:
+                            logger.error(f"Base position maintenance failed: {e}")
+                    
                     bars = get_recent_bars(SYMBOL, 10)
                     if bars is None or len(bars) == 0:
                         retry_count += 1

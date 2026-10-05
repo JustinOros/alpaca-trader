@@ -131,6 +131,7 @@ class AlpacaClient:
             if status.status != "filled":
                 logging.warning(f"Order {order_id} partially filled: {filled_qty} shares, status={status.status}")
             return float(avg_price)
+        logging.warning(f"Order {order_id} not filled: status={status.status}, type={getattr(status, 'type', '?')}, qty={getattr(status, 'qty', '?')}, notional={getattr(status, 'notional', '?')}")
         return None
 
     def place_order(self, symbol, side, notional, limit_price, limit_order_timeout, fractional=False):
